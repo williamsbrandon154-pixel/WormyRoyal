@@ -492,11 +492,15 @@ class Room {
   }
 
   broadcastState() {
+    if (!this._tickCount) this._tickCount = 0;
+    this._tickCount++;
+
     const snakes = [];
     for (const p of this.players.values()) {
       if (!p.alive) continue;
       const pts = [];
-      for (let i = 0; i < p.points.length; i += 2) {
+      // Send every 3rd point instead of every 2nd — cuts bandwidth 33%
+      for (let i = 0; i < p.points.length; i += 3) {
         pts.push(Math.round(p.points[i].x), Math.round(p.points[i].y));
       }
       snakes.push({
@@ -507,8 +511,16 @@ class Room {
         pu: p.powerup || null,
       });
     }
-    const food = [];
-    for (const f of this.food) food.push(Math.round(f.x), Math.round(f.y));
+
+    // Only send food every 3rd tick (food doesn't move fast)
+    let food;
+    if (this._tickCount % 3 === 0 || !this._lastFood) {
+      food = [];
+      for (const f of this.food) food.push(Math.round(f.x), Math.round(f.y));
+      this._lastFood = food;
+    } else {
+      food = this._lastFood;
+    }
 
     const pups = [];
     for (const pu of this.powerups) pups.push(Math.round(pu.x), Math.round(pu.y), pu.type);
@@ -590,7 +602,13 @@ const ipConnections = new Map(); // ip -> { count, lastClean }
 const MAX_CONNS_PER_IP = 6;
 const MSG_RATE_LIMIT = 30; // max messages per second per connection
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({
+  server,
+  perMessageDeflate: {
+    zlibDeflateOptions: { level: 1 }, // fast compression
+    threshold: 128, // only compress messages > 128 bytes
+  },
+});
 wss.on("connection", (ws, req) => {
   // Rate limit connections per IP
   const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";

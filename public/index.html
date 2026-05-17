@@ -375,7 +375,7 @@ function connect(name,room){
   ws=new WebSocket(proto+"://"+location.host);
   ws.onopen=()=>ws.send(JSON.stringify({t:"join",name,room,color:chosenColor,pattern:chosenPattern}));
   ws.onmessage=e=>handle(JSON.parse(e.data));
-  ws.onclose=()=>{$("warn").textContent="DISCONNECTED";$("warn").style.color="#ff4060";$("warn").style.textShadow="0 0 14px #ff4060";$("warn").classList.add("show")};
+  ws.onclose=()=>{$("warn").textContent="DISCONNECTED";$("warn").style.color="#ff4060";$("warn").style.textShadow="0 0 14px #ff4060";$("warn").classList.add("show");setTimeout(()=>{if(!ws||ws.readyState!==1)backToMenu()},3000)};
 }
 function handle(m){
   switch(m.t){
@@ -383,16 +383,20 @@ function handle(m){
     case"lobby":renderLobby(m);break;
     case"roundstart":hideScreens();countdown(m.countdownMs);break;
     case"you":amAlive=m.alive;$("spec").classList.toggle("on",!amAlive&&$("hud").classList.contains("on"));break;
-    case"state":addSnap(m);$("hud").classList.add("on");hideScreens();updateHUD(m);break;
+    case"state":addSnap(m);$("hud").classList.add("on");hideScreens();updateHUD(m);$("warn").classList.remove("show");break;
     case"died":amAlive=false;$("spec").classList.add("on");stopBoostSound();playDeathSound();break;
     case"powerup":activePowerup=m.type;activePowerupEnd=performance.now()+(m.type==="invincible"?10000:15000);playPowerupSound(m.type);break;
     case"roundover":$("hud").classList.remove("on");$("spec").classList.remove("on");activePowerup=null;if(m.ended){hideWinAnimation()}else{showWinAnimation(m.winner,m.winnerId===myId)}break;
   }
 }
+let _hudTick=0;
 function updateHUD(m){
   const me=m.s.find(x=>x.id===myId);
   if(me&&me.m>lastMass&&lastMass>0&&amAlive)playFoodSound();
   if(me)lastMass=me.m;
+  // Only update DOM every 4th tick (~8fps for HUD text, reduces reflows)
+  _hudTick++;
+  if(_hudTick%4!==0)return;
   $("lenVal").textContent=me?me.m:"—";
   const sorted=[...m.s].sort((a,b)=>b.m-a.m);
   const rank=me?sorted.findIndex(x=>x.id===myId)+1:"-";
@@ -851,24 +855,29 @@ function drawSnake(s,pts,isMe){
   }
   ctx.stroke();
 
-  // STRIPE OVERLAY (for striped pattern — draw alternating darker bands on top)
+  // STRIPE OVERLAY (for striped pattern — stable index-based bands)
   if(pat==="striped"){
-    const segSpacing=baseR*1.8;
-    let distAcc=0;
-    let inDark=false;
-    for(let i=1;i<len;i++){
-      const dx=pts[i][0]-pts[i-1][0],dy=pts[i][1]-pts[i-1][1];
-      const d=Math.sqrt(dx*dx+dy*dy);
-      distAcc+=d;
-      if(distAcc>=segSpacing){distAcc=0;inDark=!inDark}
-      if(inDark&&d>0.5){
+    const bandSize=3; // points per band
+    let i=0;
+    while(i<len-1){
+      // Skip main-color band
+      i+=bandSize;
+      if(i>=len-1)break;
+      // Draw lighter band
+      const end=Math.min(i+bandSize,len-1);
+      if(end>i){
         ctx.beginPath();
-        ctx.moveTo(pts[i-1][0],pts[i-1][1]);
-        ctx.lineTo(pts[i][0],pts[i][1]);
+        ctx.moveTo(pts[i][0],pts[i][1]);
+        for(let j=i;j<end;j++){
+          const mx=(pts[j][0]+pts[j+1][0])/2,my=(pts[j][1]+pts[j+1][1])/2;
+          ctx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
+        }
         ctx.lineWidth=baseR*2;
+        ctx.lineCap="round";ctx.lineJoin="round";
         ctx.strokeStyle=litCol;
         ctx.stroke();
       }
+      i=end;
     }
   }
 
