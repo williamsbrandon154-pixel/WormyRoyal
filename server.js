@@ -688,6 +688,6 @@ setInterval(() => {
 }, TICK_MS);
 
 server.listen(PORT, () => {
-  console.log(`ShrinkSnake running on http://localhost:${PORT}`);
+  console.log(`WormyRoyal.io running on http://localhost:${PORT}`);
   console.log(`Open that URL, or expose it with a tunnel so friends can join.`);
 });
