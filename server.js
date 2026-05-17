@@ -84,7 +84,7 @@ class Room {
       return null;
     }
     const id = this.nextId++;
-    const isHost = this.players.size === 0;
+    const isHost = this.isPublic ? false : this.players.size === 0;
     // Validate color: must be a valid hex color
     const validColor = /^#[0-9a-fA-F]{6}$/.test(color) ? color : COLORS[(id - 1) % COLORS.length];
     const validPattern = ["solid","striped","gradient"].includes(pattern) ? pattern : "solid";
@@ -198,6 +198,20 @@ class Room {
   startCountdown() {
     if (this.state !== "lobby" && this.state !== "postgame") return;
     if (this.players.size < 2) return;
+
+    // Public rooms: auto-configure settings based on player count
+    if (this.isPublic) {
+      const n = this.players.size;
+      if (n <= 4) this.settings.mapSize = 1400;
+      else if (n <= 8) this.settings.mapSize = 2000;
+      else if (n <= 15) this.settings.mapSize = 2800;
+      else this.settings.mapSize = 3500;
+      this.settings.snakeSpeed = 1.0;
+      this.settings.boostSpeed = 1.5; // strong
+      this.settings.borderSpeed = 1.0;
+      this.settings.foodRate = 1.0;
+    }
+
     this.state = "countdown";
     this.borderR = this.settings.mapSize;
     this.borderCenterX = 0;
@@ -252,8 +266,18 @@ class Room {
 
     if (this.state === "countdown" && now >= this.phaseUntil) this.beginPlay();
     if (this.state === "postgame" && now >= this.phaseUntil) {
-      this.state = "lobby";
-      this.broadcastLobby();
+      if (this.isPublic) {
+        // Public rooms: kick everyone back and close the room
+        this.broadcast({ t: "roundover", winner: null, winnerId: null, ended: true });
+        for (const p of this.players.values()) {
+          if (p.ws.readyState === 1) p.ws.close(1000, "Game over");
+        }
+        this.players.clear();
+        this.state = "lobby"; // will get cleaned up by room GC
+      } else {
+        this.state = "lobby";
+        this.broadcastLobby();
+      }
     }
     if (this.state !== "playing") return;
 
@@ -500,6 +524,7 @@ class Room {
       t: "lobby", state: this.state, players,
       winner: this.winnerName,
       settings: this.settings,
+      isPublic: this.isPublic,
     });
   }
 
