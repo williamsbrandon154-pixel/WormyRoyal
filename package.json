@@ -1,0 +1,17 @@
+{
+  "name": "slither.io",
+  "version": "1.0.0",
+  "description": "A private slither-style **battle royale**. Everyone slithers, eats, and grows — while a glowing wall closes in. Touch the wall or any enemy body and you die. **Last snake alive wins**, then it loops back to the lobby for another round.",
+  "main": "server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "ws": "^8.20.1"
+  }
+}
