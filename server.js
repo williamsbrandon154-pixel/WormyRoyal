@@ -74,6 +74,7 @@ class Room {
     this.scatterFood(FOOD_TARGET);
     this.powerups = [];
     this.powerupTimer = 0;
+    this.isPublic = false;
   }
 
   /* ---- player lifecycle ---- */
@@ -94,8 +95,19 @@ class Room {
       boost: false, mass: START_MASS, _stepAcc: 0, _curSpeed: BASE_SPEED, _stormTicks: 0,
     };
     this.players.set(id, p);
-    this.send(p, { t: "welcome", id, room: this.code, isHost, settings: this.settings });
+    this.send(p, { t: "welcome", id, room: this.code, isHost, settings: this.settings, isPublic: this.isPublic });
     this.broadcastLobby();
+
+    // Auto-start public rooms when 2+ players join (10 second countdown)
+    if (this.isPublic && this.state === "lobby" && this.players.size >= 2) {
+      if (!this._autoStartTimer) {
+        this._autoStartTimer = setTimeout(() => {
+          this._autoStartTimer = null;
+          if (this.state === "lobby" && this.players.size >= 2) this.startCountdown();
+        }, 10000);
+        this.broadcast({ t: "autostart", seconds: 10 });
+      }
+    }
     return p;
   }
 
@@ -558,6 +570,21 @@ function getRoom(code) {
   return rooms.get(code);
 }
 
+function findQuickPlayRoom() {
+  // Find an existing public room in lobby state with space
+  for (const [code, room] of rooms) {
+    if (room.isPublic && room.state === "lobby" && room.players.size < room.settings.maxPlayers) {
+      return room;
+    }
+  }
+  // No open public room — create a new one with a random code
+  const code = "PUB" + Math.random().toString(36).substring(2, 5).toUpperCase();
+  const room = new Room(code);
+  room.isPublic = true;
+  rooms.set(code, room);
+  return room;
+}
+
 const server = http.createServer((req, res) => {
   // Security headers
   const secHeaders = {
@@ -643,8 +670,13 @@ wss.on("connection", (ws, req) => {
     if (msg.t === "join") {
       if (room) return;
       const name = String(msg.name || "").replace(/[<>&"']/g, "").slice(0, 14);
-      const roomCode = String(msg.room || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase() || "MAIN";
-      room = getRoom(roomCode);
+      const mode = msg.mode || "private";
+      if (mode === "quickplay") {
+        room = findQuickPlayRoom();
+      } else {
+        const roomCode = String(msg.room || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase() || "MAIN";
+        room = getRoom(roomCode);
+      }
       me = room.addPlayer(ws, name, msg.color, msg.pattern);
       return;
     }

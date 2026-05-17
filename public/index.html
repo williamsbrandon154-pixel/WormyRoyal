@@ -53,19 +53,34 @@ label{display:block;font-size:10px;color:#666;text-transform:uppercase;letter-sp
 <body>
 <canvas id="game"></canvas>
 
-<div class="screen" id="joinScr">
+<div class="screen" id="mainMenuScr">
 <div class="card">
 <h1>Wormy<span>Royal</span>.io</h1>
 <div class="sub">Battle royale slither. Wall closes. Last alive wins.</div>
 <label>Nickname</label>
 <input id="nm" maxlength="14" placeholder="Player" autocomplete="off"/>
-<label>Room code (share with friends)</label>
+<div style="display:flex;flex-direction:column;gap:10px;align-items:center;margin-top:18px">
+  <button class="btn" id="quickPlayBtn" style="width:220px">⚡ QUICK PLAY</button>
+  <button class="btn" id="privateBtn" style="width:220px;background:linear-gradient(135deg,#ff7849,#ff5da2);box-shadow:0 4px 14px rgba(255,93,162,.3)">🔒 PRIVATE MATCH</button>
+  <button class="btn" id="customizeBtn" style="width:220px;background:linear-gradient(135deg,#7c5cff,#c77dff);box-shadow:0 4px 14px rgba(124,92,255,.3)">🎨 CUSTOMIZE</button>
+</div>
+</div>
+</div>
+
+<div class="screen hide" id="privateScr">
+<div class="card">
+<h1 style="font-size:32px">Private <span>Match</span></h1>
+<div class="sub">Create or join a private room</div>
+<label>Room Code</label>
 <input id="rm" maxlength="8" placeholder="ROOM1" autocomplete="off" style="text-transform:uppercase"/>
 <div style="display:flex;gap:10px;justify-content:center;margin-top:14px">
-  <button class="btn" id="joinBtn">PLAY</button>
-  <button class="btn" id="customizeBtn" style="background:linear-gradient(135deg,#7c5cff,#c77dff);box-shadow:0 4px 14px rgba(124,92,255,.3)">CUSTOMIZE</button>
+  <button class="btn" id="joinPrivateBtn">JOIN ROOM</button>
+  <button class="btn" id="createPrivateBtn" style="background:linear-gradient(135deg,#ff7849,#ff5da2)">CREATE ROOM</button>
 </div>
-<div class="hint">Same code = same match. Any device, any network.</div>
+<div style="margin-top:12px">
+  <button class="btn" id="privateBackBtn" style="background:#333;box-shadow:none;font-size:13px;padding:10px 30px">BACK</button>
+</div>
+<div class="hint">Share the code with friends to play together.</div>
 </div>
 </div>
 
@@ -317,14 +332,39 @@ function startPreviewAnim(){
 function stopPreviewAnim(){if(previewAnim){cancelAnimationFrame(previewAnim);previewAnim=null}}
 
 $("customizeBtn").onclick=()=>{
-  $("joinScr").classList.add("hide");
+  $("mainMenuScr").classList.add("hide");
   $("customScr").classList.remove("hide");
   startPreviewAnim();
 };
 $("customBackBtn").onclick=()=>{
   $("customScr").classList.add("hide");
-  $("joinScr").classList.remove("hide");
+  $("mainMenuScr").classList.remove("hide");
   stopPreviewAnim();
+};
+$("privateBtn").onclick=()=>{
+  $("mainMenuScr").classList.add("hide");
+  $("privateScr").classList.remove("hide");
+};
+$("privateBackBtn").onclick=()=>{
+  $("privateScr").classList.add("hide");
+  $("mainMenuScr").classList.remove("hide");
+};
+$("quickPlayBtn").onclick=()=>{
+  const name=($("nm").value.trim()||"Player");
+  connect(name,"PUBLIC","quickplay");
+};
+$("joinPrivateBtn").onclick=()=>{
+  const name=($("nm").value.trim()||"Player");
+  const room=($("rm").value.trim()||"").toUpperCase();
+  if(!room){$("rm").focus();return}
+  connect(name,room,"private");
+};
+$("createPrivateBtn").onclick=()=>{
+  const name=($("nm").value.trim()||"Player");
+  // Generate random room code
+  const code=Math.random().toString(36).substring(2,6).toUpperCase();
+  $("rm").value=code;
+  connect(name,code,"private");
 };
 
 // ===== LEAVE / BACK TO MENU =====
@@ -337,7 +377,8 @@ function backToMenu(){
   $("spec").classList.remove("on");
   $("warn").classList.remove("show");
   $("lobbyScr").classList.add("hide");
-  $("joinScr").classList.remove("hide");
+  $("privateScr").classList.add("hide");
+  $("mainMenuScr").classList.remove("hide");
 }
 $("leaveBtn").onclick=backToMenu;
 $("menuBtn").onclick=backToMenu;
@@ -370,17 +411,18 @@ const qs=new URLSearchParams(location.search);
 if(qs.get("room"))$("rm").value=qs.get("room").toUpperCase();
 
 // ===== NETWORKING =====
-function connect(name,room){
+function connect(name,room,mode){
   const proto=location.protocol==="https:"?"wss":"ws";
   ws=new WebSocket(proto+"://"+location.host);
-  ws.onopen=()=>ws.send(JSON.stringify({t:"join",name,room,color:chosenColor,pattern:chosenPattern}));
+  ws.onopen=()=>ws.send(JSON.stringify({t:"join",name,room,color:chosenColor,pattern:chosenPattern,mode:mode||"private"}));
   ws.onmessage=e=>handle(JSON.parse(e.data));
   ws.onclose=()=>{$("warn").textContent="DISCONNECTED";$("warn").style.color="#ff4060";$("warn").style.textShadow="0 0 14px #ff4060";$("warn").classList.add("show");setTimeout(()=>{if(!ws||ws.readyState!==1)backToMenu()},3000)};
 }
 function handle(m){
   switch(m.t){
-    case"welcome":myId=m.id;iAmHost=m.isHost;$("joinScr").classList.add("hide");$("lobbyScr").classList.remove("hide");$("lobbyCode").textContent=m.room;history.replaceState(null,"","?room="+m.room);break;
+    case"welcome":myId=m.id;iAmHost=m.isHost;$("mainMenuScr").classList.add("hide");$("privateScr").classList.add("hide");$("lobbyScr").classList.remove("hide");$("lobbyCode").textContent=m.room;history.replaceState(null,"","?room="+m.room);break;
     case"lobby":renderLobby(m);break;
+    case"autostart":startAutoCountdown(m.seconds);break;
     case"roundstart":hideScreens();countdown(m.countdownMs);break;
     case"you":amAlive=m.alive;$("spec").classList.toggle("on",!amAlive&&$("hud").classList.contains("on"));break;
     case"state":addSnap(m);$("hud").classList.add("on");hideScreens();updateHUD(m);$("warn").classList.remove("show");break;
@@ -409,6 +451,19 @@ function updateHUD(m){
 }
 
 // ===== LOBBY =====
+let _autoTimer=null;
+function startAutoCountdown(sec){
+  if(_autoTimer)clearInterval(_autoTimer);
+  let remain=sec;
+  $("startBtn").textContent="STARTING IN "+remain+"s...";
+  $("startBtn").disabled=true;
+  _autoTimer=setInterval(()=>{
+    remain--;
+    if(remain<=0){clearInterval(_autoTimer);_autoTimer=null;$("startBtn").textContent="STARTING...";return}
+    $("startBtn").textContent="STARTING IN "+remain+"s...";
+  },1000);
+}
+
 function renderLobby(m){
   if(m.state==="lobby"||m.state==="postgame"){$("lobbyScr").classList.remove("hide");$("hud").classList.remove("on")}
   const l=$("plist");l.innerHTML="";
@@ -431,7 +486,7 @@ function renderLobby(m){
   }
 }
 function esc(s){return s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
-function hideScreens(){$("joinScr").classList.add("hide");$("lobbyScr").classList.add("hide")}
+function hideScreens(){$("mainMenuScr").classList.add("hide");$("privateScr").classList.add("hide");$("lobbyScr").classList.add("hide")}
 let cdT=null,winShowing=false;
 function countdown(ms){
   const w=$("warn");let left=Math.ceil(ms/1000);
@@ -675,7 +730,7 @@ setInterval(()=>{
   if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"input",angle:aim,boost:boosting}));
   if(boosting&&amAlive)startBoostSound();else stopBoostSound();
 },33);
-$("joinBtn").onclick=()=>{connect(($("nm").value.trim()||"Player"),($("rm").value.trim()||"MAIN").toUpperCase())};
+// Legacy joinBtn removed — handled by quickPlayBtn/joinPrivateBtn/createPrivateBtn
 $("startBtn").onclick=()=>{sendSettings();ws&&ws.send(JSON.stringify({t:"start"}))};
 function sendSettings(){
   if(!ws||!iAmHost)return;
