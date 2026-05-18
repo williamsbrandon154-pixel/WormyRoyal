@@ -914,11 +914,14 @@ let hexPattern=null;
 function drawGrid(W,H){
   if(!hexPattern||hexPattern._z!==ZOOM) {hexPattern=ctx.createPattern(hexTile,"repeat");hexPattern._z=ZOOM;}
   ctx.save();
-  const offX=-((camX*ZOOM)%(hexTile._colW*2));
-  const offY=-((camY*ZOOM)%(hexTile._rowH*2));
+  const sc=ZOOM;
+  const offX=-((camX*sc)%(hexTile._colW*2*sc));
+  const offY=-((camY*sc)%(hexTile._rowH*2*sc));
   ctx.translate(offX,offY);
+  ctx.scale(sc,sc);
   ctx.fillStyle=hexPattern;
-  ctx.fillRect(-hexTile._tW-offX,-hexTile._tH-offY,W+hexTile._tW*2,H+hexTile._tH*2);
+  const invSc=1/sc;
+  ctx.fillRect((-hexTile._tW-offX)*invSc,(-hexTile._tH-offY)*invSc,(W+hexTile._tW*2)*invSc,(H+hexTile._tH*2)*invSc);
   ctx.restore();
 }
 
@@ -983,10 +986,10 @@ function drawSnake(s,pts,isMe){
     ctx.lineWidth=baseR*2+12;ctx.strokeStyle=`rgba(255,215,0,${flk})`;ctx.stroke();
   }
 
-  // OUTLINE (one continuous dark border)
+  // OUTLINE (dark tint of chosen color)
   tracePath();
   ctx.lineWidth=baseR*2+5;
-  ctx.strokeStyle=`rgb(${cr*.12|0},${cg*.12|0},${cb*.12|0})`;
+  ctx.strokeStyle=`rgb(${cr*.35|0},${cg*.35|0},${cb*.35|0})`;
   ctx.stroke();
 
   // BODY (one continuous stroke — pattern applied to full path)
@@ -1128,7 +1131,8 @@ function render(){
     const[sx,sy]=w2s(fx,fy);
     if(sx<-20||sx>W+20||sy<-20||sy>H+20)continue;
     const ci=Math.abs((fx*7+fy*3)|0)%FC.length;
-    ctx.drawImage(getFoodSprite(ci),sx-14,sy-14,28,28);
+    const fsz=28*ZOOM;
+    ctx.drawImage(getFoodSprite(ci),sx-fsz/2,sy-fsz/2,fsz,fsz);
   }
 
   // Power-ups on map
@@ -1171,19 +1175,17 @@ function render(){
   ctx.beginPath();ctx.arc(cx,cy,br+5,0,Math.PI*2);
   ctx.strokeStyle="rgba(200,40,50,0.2)";ctx.lineWidth=10;ctx.stroke();
 
-  // Snakes — smooth interpolation with stable tail
+  // Snakes — interpolate head+body, snap tail to avoid glitch
   for(const s of next.s){
     const ps=findSn(prev,s.id);
     const pts=[];
     const nLen=s.p.length;
     const pLen=ps?ps.p.length:0;
-    // Use shorter count minus 2 to avoid the glitchy tail tip
-    const useLen=Math.min(nLen,pLen||nLen);
-    const safeLen=Math.max(4,useLen-2);
-    for(let i=0;i<safeLen;i+=2){
-      if(i>=nLen)break;
+    // Interpolate the first 70% of points (head+body), snap the rest (tail)
+    const interpLimit=pLen>0?Math.floor(Math.min(nLen,pLen)*0.7):0;
+    for(let i=0;i<nLen;i+=2){
       let wx=s.p[i],wy=s.p[i+1];
-      if(ps&&i<pLen){
+      if(ps&&i<interpLimit&&i<pLen){
         wx=ps.p[i]+(s.p[i]-ps.p[i])*a;
         wy=ps.p[i+1]+(s.p[i+1]-ps.p[i+1])*a;
       }

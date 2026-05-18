@@ -160,6 +160,7 @@ class Room {
     p._curSpeed = BASE_SPEED;
     p._stormTicks = 0;
     p._boostTicks = 0;
+    p._tightTurnTicks = 0;
     p.powerups = [];        // array of {type, until}
     p.points = [];
     for (let i = 0; i < 12; i++) {
@@ -361,6 +362,18 @@ class Room {
       // Bigger snakes turn slower — ranges from 0.22 (small) to 0.08 (huge)
       const turnRate = Math.max(0.08, TURN_RATE - p.mass * 0.0012);
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
+
+      // Prevent perfect coiling: if turning hard for too long, slow down
+      if (Math.abs(d) > turnRate * 0.8) {
+        p._tightTurnTicks++;
+        // After 1.5 seconds of tight turning, start slowing down
+        if (p._tightTurnTicks > 45) {
+          const penalty = Math.min(0.6, (p._tightTurnTicks - 45) * 0.008);
+          p._curSpeed *= (1 - penalty);
+        }
+      } else {
+        p._tightTurnTicks = Math.max(0, p._tightTurnTicks - 3);
+      }
 
       let targetSpeed = BASE_SPEED * this.settings.snakeSpeed;
       if (p.boost && p.mass > BOOST_MIN_MASS) {
