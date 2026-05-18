@@ -368,15 +368,18 @@ class Room {
       p.powerups = p.powerups.filter(pu => now < pu.until);
 
       const d = angleDelta(p.heading, p.targetAngle);
-      // Slither.io style: small snakes turn snappy, big snakes need
-      // wide arcs. Asymptotic decrease — never hits zero, so even
-      // a 1000-mass beast can still steer (just slowly).
-      //   mass 14  → 0.205 rad/tick (~352°/s — very nimble)
-      //   mass 100 → 0.155 rad/tick (~266°/s)
-      //   mass 300 → 0.122 rad/tick (~210°/s)
-      //   mass 1000→ 0.102 rad/tick (~175°/s)
-      //   mass ∞   → 0.09 rad/tick floor (~155°/s)
-      const turnRate = 0.09 + 0.13 / (1 + p.mass / 100);
+      // Slither.io's ACTUAL turn rate formula (from reverse-engineered
+      // protocol). The game uses:
+      //   sct   = body-part count (we use points.length)
+      //   sc    = min(6, 1 + (sct - 2) / 106)   // thickness factor
+      //   scang = 0.13 + 0.87 * ((7-sc)/6)^2    // turn scaler
+      //   omega = MAMU * scang                  // rad per tick
+      // Slither's MAMU is 0.033 rad / 8ms tick = 4.125 rad/s.
+      // For our 30Hz (33ms) tick: 4.125 / 30 = 0.1375 rad/tick.
+      const sct = p.points.length;
+      const sc = Math.min(6, 1 + (sct - 2) / 106);
+      const scang = 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
+      const turnRate = 0.1375 * scang;
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
 
       let targetSpeed = BASE_SPEED * this.settings.snakeSpeed;
