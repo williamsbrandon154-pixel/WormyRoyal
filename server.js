@@ -177,7 +177,11 @@ class Room {
     if (this.hasPowerup(p, "jumbo")) r *= 1.8;
     return r;
   }
-  targetLen(p)   { return 70 + p.mass * 4.0; }
+  targetLen(p) {
+    // Length caps at mass 80 — after that you just get fatter
+    const effectiveMass = Math.min(p.mass, 80);
+    return 70 + effectiveMass * 4.0;
+  }
 
   /* ---- food ---- */
   scatterFood(n) {
@@ -353,7 +357,9 @@ class Room {
       p.powerups = p.powerups.filter(pu => now < pu.until);
 
       const d = angleDelta(p.heading, p.targetAngle);
-      p.heading += Math.max(-TURN_RATE, Math.min(TURN_RATE, d));
+      // Bigger snakes turn slower — ranges from 0.22 (small) to 0.08 (huge)
+      const turnRate = Math.max(0.08, TURN_RATE - p.mass * 0.0012);
+      p.heading += Math.max(-turnRate, Math.min(turnRate, d));
 
       let targetSpeed = BASE_SPEED * this.settings.snakeSpeed;
       if (p.boost && p.mass > BOOST_MIN_MASS) {
