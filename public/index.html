@@ -435,7 +435,7 @@ const SNAP_MAX=12;
 const RENDER_DELAY=80; // ms behind latest snapshot
 let camX=0,camY=0;
 const isTouch=matchMedia("(pointer:coarse)").matches;
-const ZOOM=isTouch?1.1:1.5; // less zoom on mobile so you can see more
+const ZOOM=isTouch?0.75:1.5; // much wider view on mobile
 function addSnap(s){s._t=performance.now();snapBuf.push(s);if(snapBuf.length>SNAP_MAX)snapBuf.shift()}
 function getBracket(){
   const rt=performance.now()-RENDER_DELAY;
@@ -792,7 +792,7 @@ cv.addEventListener("touchmove",e=>{
 cv.addEventListener("touchend",e=>{
   if(e.touches.length<2)boosting=false; // released second finger
 },{passive:true});
-if(isTouch){$("boost").classList.add("touch");$("boost").ontouchstart=e=>{e.preventDefault();boosting=true};$("boost").ontouchend=e=>{e.preventDefault();boosting=false}}
+// Boost button hidden on touch — second finger handles it
 setInterval(()=>{
   if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"input",angle:aim,boost:boosting}));
   if(boosting&&amAlive)startBoostSound();else stopBoostSound();
@@ -1040,6 +1040,21 @@ function drawSnake(s,pts,isMe){
     const ppx=ex+Math.cos(dir)*eyeR*.4;
     const ppy=ey+Math.sin(dir)*eyeR*.4;
     ctx.beginPath();ctx.arc(ppx,ppy,eyeR*.5,0,Math.PI*2);ctx.fillStyle="#111";ctx.fill();
+  }
+
+  // Direction arrow (in front of your snake)
+  if(isMe){
+    const arrowDist=baseR*2.5;
+    const ax=hx+Math.cos(dir)*arrowDist;
+    const ay=hy+Math.sin(dir)*arrowDist;
+    const arrowSize=baseR*0.7;
+    ctx.beginPath();
+    ctx.moveTo(ax+Math.cos(dir)*arrowSize,ay+Math.sin(dir)*arrowSize);
+    ctx.lineTo(ax+Math.cos(dir+2.5)*arrowSize,ay+Math.sin(dir+2.5)*arrowSize);
+    ctx.lineTo(ax+Math.cos(dir-2.5)*arrowSize,ay+Math.sin(dir-2.5)*arrowSize);
+    ctx.closePath();
+    ctx.fillStyle="rgba(255,255,255,0.6)";
+    ctx.fill();
   }
 
   // Name
