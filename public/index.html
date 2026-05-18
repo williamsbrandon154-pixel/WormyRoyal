@@ -1015,19 +1015,24 @@ function drawSnake(s,pts,isMe){
     ctx.lineWidth=baseR*2+12;ctx.strokeStyle=`rgba(255,215,0,${flk})`;ctx.stroke();
   }
 
-  // === BODY (drawn first, behind head) ===
-  // Body outline (soft dark edge)
-  traceBody();
+  // ====== UNIFIED SNAKE BODY (no internal seams) ======
+  // The whole snake is rendered as one continuous stroke chain.
+  // For the "head on top during coil" effect, we re-stroke the
+  // FILL ONLY (no outline) over the head region — covering any
+  // older body section the head overlaps. No terminal cap is
+  // visible because the head fill matches the body fill width.
+
+  // Full body outline (dark edge — runs from head to tail)
+  tracePath();
   ctx.lineWidth=baseR*2+4;
   ctx.strokeStyle=outlineCol;
   ctx.stroke();
-  // Body fill (solid base color first — covers ring gaps)
-  traceBody();
+  // Full body fill (solid base color)
+  tracePath();
   ctx.lineWidth=baseR*2;
   ctx.strokeStyle=col;
   ctx.stroke();
-  // Body color rings (smooth alternating bands like slither.io)
-  // Start from 0 — head will draw on top and cover the head region
+  // Color rings (full length, head will overlay its region)
   if(pat==="striped"||pat==="gradient"){
     const bandSize=pat==="gradient"?5:4;
     let i=0,bandIdx=0;
@@ -1047,34 +1052,32 @@ function drawSnake(s,pts,isMe){
       i=end;bandIdx++;
     }
   }
-  // Body glossy top highlight (slither.io's signature shine)
-  traceBody();
+  // Glossy top highlight (full length)
+  tracePath();
   ctx.lineWidth=baseR*0.55;
   ctx.strokeStyle=`rgba(255,255,255,0.22)`;
   ctx.stroke();
-  // Thin inner specular shine (brighter, thinner line on top)
-  traceBody();
+  // Thin specular shine (full length)
+  tracePath();
   ctx.lineWidth=baseR*0.18;
   ctx.strokeStyle=`rgba(255,255,255,0.35)`;
   ctx.stroke();
 
-  // === HEAD (drawn last, always on top) ===
-  // Head outline
-  traceHead();
-  ctx.lineWidth=baseR*2+4;
-  ctx.strokeStyle=outlineCol;
-  ctx.stroke();
-  // Head fill (solid)
+  // ===== HEAD OVERLAY (covers any body the head crosses during coil) =====
+  // No outline — the body's outline already runs continuously.
+  // Just re-paint fill + rings + shine over the head region.
+  // Head fill — matches body fill width so no terminal cap shows
   traceHead();
   ctx.lineWidth=baseR*2;
   ctx.strokeStyle=col;
   ctx.stroke();
-  // Head color rings
+  // Head color rings (re-painted on top — keeps pattern intact during coil)
   if(pat==="striped"||pat==="gradient"){
     const bandSize=pat==="gradient"?5:4;
+    const headEnd=Math.min(headLen+2,len-1);
     let i=0,bandIdx=0;
-    while(i<headLen){
-      const end=Math.min(i+bandSize,headLen);
+    while(i<headEnd){
+      const end=Math.min(i+bandSize,headEnd);
       if(bandIdx%2===1){
         ctx.beginPath();
         ctx.moveTo(pts[i][0],pts[i][1]);
@@ -1089,7 +1092,7 @@ function drawSnake(s,pts,isMe){
       i=end;bandIdx++;
     }
   }
-  // Head glossy highlight
+  // Head shine (re-painted on top)
   traceHead();
   ctx.lineWidth=baseR*0.55;
   ctx.strokeStyle=`rgba(255,255,255,0.22)`;
