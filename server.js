@@ -358,9 +358,11 @@ class Room {
       p.powerups = p.powerups.filter(pu => now < pu.until);
 
       const d = angleDelta(p.heading, p.targetAngle);
-      // Small snakes turn super fast (snappy); bigger = wider radius
-      // Base 0.26 rad/tick (~450°/s) → scales down to 0.06 floor for huge snakes
-      const turnRate = Math.max(0.06, 0.26 - p.mass * 0.0009);
+      // Slither.io: CONSTANT turn rate regardless of size.
+      // The "big snake wide radius" feel comes purely from the body
+      // trail taking time to catch up to the head — not from a slower
+      // angular rate. Tuned to ~310°/s which matches slither.io feel.
+      const turnRate = 0.18;
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
 
       let targetSpeed = BASE_SPEED * this.settings.snakeSpeed;
