@@ -178,9 +178,10 @@ class Room {
     return r;
   }
   targetLen(p) {
-    // Length caps at mass 80 — after that you just get fatter
-    const effectiveMass = Math.min(p.mass, 80);
-    return 70 + effectiveMass * 4.0;
+    // Length grows normally up to mass 200, then slows way down (gets fat instead)
+    if (p.mass <= 200) return 70 + p.mass * 4.0;
+    // After 200: still grows but much slower (diminishing returns)
+    return 70 + 200 * 4.0 + (p.mass - 200) * 0.8;
   }
 
   /* ---- food ---- */
