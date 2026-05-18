@@ -1257,17 +1257,16 @@ function render(){
   ctx.strokeStyle=`rgba(255,200,210,${pulseA*0.4})`;
   ctx.lineWidth=1;ctx.stroke();
 
-  // Snakes — interpolate head+body, snap tail to avoid glitch
+  // Snakes — smooth interpolation throughout. Server now sends a smooth
+  // sub-pixel tail position, so we can interpolate all points cleanly.
   for(const s of next.s){
     const ps=findSn(prev,s.id);
     const pts=[];
     const nLen=s.p.length;
     const pLen=ps?ps.p.length:0;
-    // Interpolate the first 70% of points (head+body), snap the rest (tail)
-    const interpLimit=pLen>0?Math.floor(Math.min(nLen,pLen)*0.7):0;
     for(let i=0;i<nLen;i+=2){
       let wx=s.p[i],wy=s.p[i+1];
-      if(ps&&i<interpLimit&&i<pLen){
+      if(ps&&i<pLen){
         wx=ps.p[i]+(s.p[i]-ps.p[i])*a;
         wy=ps.p[i+1]+(s.p[i+1]-ps.p[i+1])*a;
       }

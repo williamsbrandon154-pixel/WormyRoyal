@@ -160,6 +160,8 @@ class Room {
     p._curSpeed = BASE_SPEED;
     p._stormTicks = 0;
     p._boostTicks = 0;
+    p._displayLen = null;   // resets to targetLen on first tick
+
     p.powerups = [];        // array of {type, until}
     p.points = [];
     for (let i = 0; i < 12; i++) {
@@ -404,11 +406,35 @@ class Room {
         p.points[0] = { x: nx, y: ny };
       }
 
-      let len = 0, want = this.targetLen(p);
+      // Slither.io style smooth tail: interpolate the last point to
+      // sub-pixel precision so it doesn't snap between body points.
+      // Walk the body, find where target length ends, replace that
+      // point with an interpolated tail position.
+      // Also smoothly lerp display length toward target — so eating
+      // food makes you grow gradually, not in a single 4px jump.
+      const targetL = this.targetLen(p);
+      if (p._displayLen == null) p._displayLen = targetL;
+      p._displayLen += (targetL - p._displayLen) * 0.12;
+      let acc = 0, want = p._displayLen;
+      let trimAt = p.points.length;
       for (let i = 1; i < p.points.length; i++) {
-        len += Math.hypot(p.points[i].x - p.points[i-1].x, p.points[i].y - p.points[i-1].y);
-        if (len > want) { p.points.length = i + 1; break; }
+        const seg = Math.hypot(
+          p.points[i].x - p.points[i-1].x,
+          p.points[i].y - p.points[i-1].y
+        );
+        if (acc + seg >= want) {
+          // Tail ends fractionally inside this segment
+          const t = seg > 0 ? Math.max(0, Math.min(1, (want - acc) / seg)) : 0;
+          p.points[i] = {
+            x: p.points[i-1].x + (p.points[i].x - p.points[i-1].x) * t,
+            y: p.points[i-1].y + (p.points[i].y - p.points[i-1].y) * t,
+          };
+          trimAt = i + 1;
+          break;
+        }
+        acc += seg;
       }
+      if (trimAt < p.points.length) p.points.length = trimAt;
     }
 
     /* 3. Eating + Magnet + Power-up pickup */
