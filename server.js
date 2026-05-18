@@ -360,17 +360,17 @@ class Room {
 
       const d = angleDelta(p.heading, p.targetAngle);
       // Bigger snakes turn slower — ranges from 0.22 (small) to 0.08 (huge)
-      const turnRate = Math.max(0.08, TURN_RATE - p.mass * 0.0012);
+      let turnRate = Math.max(0.08, TURN_RATE - p.mass * 0.0012);
+      // After 1.5s of tight turning, turn rate degrades (can't coil perfectly)
+      if (p._tightTurnTicks > 45) {
+        const penalty = Math.min(0.6, (p._tightTurnTicks - 45) * 0.008);
+        turnRate *= (1 - penalty);
+      }
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
 
-      // Prevent perfect coiling: if turning hard for too long, slow down
+      // Prevent perfect coiling: if turning hard for too long, turn rate degrades
       if (Math.abs(d) > turnRate * 0.8) {
         p._tightTurnTicks++;
-        // After 1.5 seconds of tight turning, start slowing down
-        if (p._tightTurnTicks > 45) {
-          const penalty = Math.min(0.6, (p._tightTurnTicks - 45) * 0.008);
-          p._curSpeed *= (1 - penalty);
-        }
       } else {
         p._tightTurnTicks = Math.max(0, p._tightTurnTicks - 3);
       }
