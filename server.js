@@ -173,15 +173,18 @@ class Room {
   hasPowerup(p, type) { return p.powerups.some(pu => pu.type === type); }
 
   snakeRadius(p) {
-    let r = SNAKE_BASE_R + Math.min(p.mass * 0.05, 13);
+    // Slither.io style: asymptotic growth — fast at first, soft cap.
+    // Max radius approaches SNAKE_BASE_R + 18 ≈ 25 at infinite mass.
+    // mass 10→9px, mass 50→14px, mass 200→20px, mass 1000→24px.
+    let r = SNAKE_BASE_R + 18 * (1 - 1 / (1 + p.mass / 80));
     if (this.hasPowerup(p, "jumbo")) r *= 1.8;
     return r;
   }
   targetLen(p) {
-    // Length grows normally up to mass 200, then slows way down (gets fat instead)
-    if (p.mass <= 200) return 70 + p.mass * 4.0;
-    // After 200: still grows but much slower (diminishing returns)
-    return 70 + 200 * 4.0 + (p.mass - 200) * 0.8;
+    // Slither.io style: length scales with sqrt(mass).
+    // Doubling your mass doesn't double your length — diminishing returns.
+    // mass 10→170, mass 50→307, mass 200→555, mass 1000→1167.
+    return 60 + 35 * Math.sqrt(p.mass);
   }
 
   /* ---- food ---- */
@@ -256,10 +259,15 @@ class Room {
   killSnake(p, reason) {
     if (!p.alive) return;
     p.alive = false;
-    const drops = Math.min(60, Math.floor(p.mass));
+    // Slither.io: dead snakes drop ~70% of their mass as food.
+    // Distribute drops ALONG the body so it looks like the snake collapsed.
+    const drops = Math.min(400, Math.floor(p.mass * 0.7));
+    const bodyLen = p.points.length;
     for (let i = 0; i < drops; i++) {
-      const pt = p.points[Math.floor(rand(0, p.points.length))];
-      if (pt) this.food.push({ x: pt.x + rand(-8, 8), y: pt.y + rand(-8, 8) });
+      // Sample body points evenly across length (not random) for a clean trail
+      const idx = Math.floor((i / drops) * bodyLen) % bodyLen;
+      const pt = p.points[idx];
+      if (pt) this.food.push({ x: pt.x + rand(-12, 12), y: pt.y + rand(-12, 12) });
     }
     p.points = [];
     this.send(p, { t: "died", reason });
@@ -368,19 +376,16 @@ class Room {
       let targetSpeed = BASE_SPEED * this.settings.snakeSpeed;
       if (p.boost && p.mass > BOOST_MIN_MASS) {
         targetSpeed = BOOST_SPEED * this.settings.boostSpeed;
-        p._boostTicks++;
-        const compound = 1 + p._boostTicks * 0.003; // slow compounding drain
-        if (this.hasPowerup(p, "boostme")) {
-          // No mass loss while boostme is active
-        } else {
-          p.mass -= BOOST_DRAIN * compound;
+        // Slither.io: constant drain (no compounding) — ~1% mass/sec.
+        // At 30 ticks/sec, that's ~0.0003 fraction per tick.
+        if (!this.hasPowerup(p, "boostme")) {
+          p.mass -= Math.max(0.04, p.mass * 0.0035);
+          // Drop trailing food orbs while boosting (slither.io drop trail)
+          if (Math.random() < 0.18) {
+            const tail = p.points[p.points.length - 1];
+            if (tail) this.food.push({ x: tail.x, y: tail.y });
+          }
         }
-        if (Math.random() < 0.16 && !this.hasPowerup(p, "boostme")) {
-          const tail = p.points[p.points.length - 1];
-          if (tail) this.food.push({ x: tail.x, y: tail.y });
-        }
-      } else {
-        p._boostTicks = Math.max(0, p._boostTicks - 2); // recover when not boosting
       }
 
       // Smooth speed ramping (lerp toward target)
