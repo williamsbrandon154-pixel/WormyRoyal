@@ -19,7 +19,7 @@ const BOOST_DRAIN      = 0.09;
 const POINT_STEP       = 4.2;
 const FOOD_TARGET      = 200;
 const FOOD_MASS        = 1;
-const SNAKE_BASE_R     = 7;
+const SNAKE_BASE_R     = 6;
 const BORDER_DRAIN     = 0.35;  // mass lost per tick while in the storm
 
 const COLORS = [
@@ -175,10 +175,11 @@ class Room {
   hasPowerup(p, type) { return p.powerups.some(pu => pu.type === type); }
 
   snakeRadius(p) {
-    // Slither.io style: asymptotic growth — fast at first, soft cap.
-    // Max radius approaches SNAKE_BASE_R + 18 ≈ 25 at infinite mass.
-    // mass 10→9px, mass 50→14px, mass 200→20px, mass 1000→24px.
-    let r = SNAKE_BASE_R + 18 * (1 - 1 / (1 + p.mass / 80));
+    // Slither.io style: slim snakes so the body width is well under the
+    // turn radius — this makes coils show distinct loops with a visible
+    // hole, not a solid donut. Max radius ~16 at infinite mass.
+    //   mass 14→8, mass 100→11.6, mass 400→14.3, mass 1000→15.3
+    let r = SNAKE_BASE_R + 10 * (1 - 1 / (1 + p.mass / 80));
     if (this.hasPowerup(p, "jumbo")) r *= 1.8;
     return r;
   }
@@ -372,19 +373,18 @@ class Room {
       //   sc    = min(6, 1 + (sct - 2) / 106)   // thickness factor
       //   scang = 0.13 + 0.87 * ((7-sc)/6)^2    // turn scaler
       //   ssp   = 5.39 + 0.4 * sc               // speed scaler
-      // We bump turn base to 0.24 (vs slither's 0.1375) for a snappier
-      // arcade feel while keeping slither's 4-5x size falloff.
-      // 0.24 also ensures turn radius > body diameter at ALL sizes,
-      // so the head orbits OUTSIDE the coil at every scale.
-      //   mass 14   → 0.213 rad/tick (~366°/s — snappy)
-      //   mass 100  → 0.181 rad/tick (~311°/s)
-      //   mass 400  → 0.139 rad/tick (~238°/s)
-      //   mass 1000 → 0.098 rad/tick (~169°/s)
-      //   mass 3000 → 0.046 rad/tick (~78°/s — wide arcs)
+      // Turn base 0.26 + slimmer snake bodies ensures turn radius is
+      // comfortably > body diameter at every size — coils show as
+      // distinct loops with a visible center hole, not solid donuts.
+      //   mass 14   → 0.231 rad/tick (~396°/s — very snappy)
+      //   mass 100  → 0.196 rad/tick (~337°/s)
+      //   mass 400  → 0.150 rad/tick (~258°/s)
+      //   mass 1000 → 0.106 rad/tick (~182°/s)
+      //   mass 3000 → 0.049 rad/tick (~85°/s — wide arcs)
       const sct = p.points.length;
       const sc = Math.min(6, 1 + (sct - 2) / 106);
       const scang = 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
-      const turnRate = 0.24 * scang;
+      const turnRate = 0.26 * scang;
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
 
       // Slither.io: bigger snakes are slightly faster (sc-scaled).
