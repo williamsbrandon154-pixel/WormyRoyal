@@ -368,21 +368,31 @@ class Room {
       p.powerups = p.powerups.filter(pu => now < pu.until);
 
       const d = angleDelta(p.heading, p.targetAngle);
-      // Slither.io's ACTUAL turn rate formula (from reverse-engineered
-      // protocol). The game uses:
-      //   sct   = body-part count (we use points.length)
+      // Slither.io scaling (reverse-engineered):
       //   sc    = min(6, 1 + (sct - 2) / 106)   // thickness factor
       //   scang = 0.13 + 0.87 * ((7-sc)/6)^2    // turn scaler
-      //   omega = MAMU * scang                  // rad per tick
-      // Slither's MAMU is 0.033 rad / 8ms tick = 4.125 rad/s.
-      // For our 30Hz (33ms) tick: 4.125 / 30 = 0.1375 rad/tick.
+      //   ssp   = 5.39 + 0.4 * sc               // speed scaler
+      // We bump turn base to 0.24 (vs slither's 0.1375) for a snappier
+      // arcade feel while keeping slither's 4-5x size falloff.
+      // 0.24 also ensures turn radius > body diameter at ALL sizes,
+      // so the head orbits OUTSIDE the coil at every scale.
+      //   mass 14   → 0.213 rad/tick (~366°/s — snappy)
+      //   mass 100  → 0.181 rad/tick (~311°/s)
+      //   mass 400  → 0.139 rad/tick (~238°/s)
+      //   mass 1000 → 0.098 rad/tick (~169°/s)
+      //   mass 3000 → 0.046 rad/tick (~78°/s — wide arcs)
       const sct = p.points.length;
       const sc = Math.min(6, 1 + (sct - 2) / 106);
       const scang = 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
-      const turnRate = 0.1375 * scang;
+      const turnRate = 0.24 * scang;
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
 
-      let targetSpeed = BASE_SPEED * this.settings.snakeSpeed;
+      // Slither.io: bigger snakes are slightly faster (sc-scaled).
+      // This makes their turn RADIUS bigger relative to body width,
+      // so the head physically orbits outside its own coil — the
+      // signature "head sticks out" look.
+      const sizeBoost = 1 + (sc - 1) * 0.1;
+      let targetSpeed = BASE_SPEED * this.settings.snakeSpeed * sizeBoost;
       if (p.boost && p.mass > BOOST_MIN_MASS) {
         targetSpeed = BOOST_SPEED * this.settings.boostSpeed;
         // Slither.io: constant drain (no compounding) — ~1% mass/sec.
