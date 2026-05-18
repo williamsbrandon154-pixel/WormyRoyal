@@ -437,7 +437,9 @@ const SNAP_MAX=12;
 const RENDER_DELAY=80; // ms behind latest snapshot
 let camX=0,camY=0;
 const isTouch=matchMedia("(pointer:coarse)").matches;
-const ZOOM=isTouch?0.30:1.5; // ultra wide view on mobile
+const ZOOM_BASE=isTouch?0.40:1.5; // slightly higher mobile base since we now zoom out with growth
+let ZOOM=ZOOM_BASE; // dynamic — lerps toward target based on snake size
+let smoothEyeDir=0; // smooth-lerped eye direction (separate from body heading)
 function addSnap(s){s._t=performance.now();snapBuf.push(s);if(snapBuf.length>SNAP_MAX)snapBuf.shift()}
 function getBracket(){
   const rt=performance.now()-RENDER_DELAY;
@@ -1107,9 +1109,18 @@ function drawSnake(s,pts,isMe){
   const[hx,hy]=pts[0];
   const dir=Math.atan2(pts[0][1]-pts[Math.min(3,len-1)][1],pts[0][0]-pts[Math.min(3,len-1)][0]);
   const eyeR=baseR*.42;
-  // Aim pupils toward the target/mouse for that lively slither.io look
+  // Eye direction lerps smoothly toward target (own snake: cursor, others: heading).
+  // Independent of body rotation — creates the "glance" feel from slither.io.
   let aimDir=dir;
-  if(isMe){ aimDir=aim; }
+  if(isMe){
+    // Smooth lerp of pupil aim direction toward cursor
+    const targetEye=aim;
+    let dd=targetEye-smoothEyeDir;
+    while(dd>Math.PI)dd-=2*Math.PI;
+    while(dd<-Math.PI)dd+=2*Math.PI;
+    smoothEyeDir+=dd*0.18;
+    aimDir=smoothEyeDir;
+  }
   for(const off of[-.55,.55]){
     const ex=hx+Math.cos(dir+off)*baseR*.58;
     const ey=hy+Math.sin(dir+off)*baseR*.58;
@@ -1165,7 +1176,7 @@ function render(){
   const{prev,next,t}=bracket;
   const a=Math.max(0,Math.min(1,t)); // always 0-1, never extrapolate
 
-  // Camera
+  // Camera + dynamic zoom (slither.io style: zoom out as you grow)
   let me=findSn(next,myId);
   if(!me&&next.s.length)me=next.s[0];
   if(me){
@@ -1173,6 +1184,14 @@ function render(){
     let tx=me.p[0],ty=me.p[1];
     if(mp){tx=mp.p[0]+(me.p[0]-mp.p[0])*a;ty=mp.p[1]+(me.p[1]-mp.p[1])*a}
     camX+=(tx-camX)*0.15;camY+=(ty-camY)*0.15;
+
+    // Zoom out based on snake radius. me.r ranges ~6 (start) to ~16 (max).
+    // Map to sc-style factor: sc=1 at r=6, sc=3 at r=16 (more conservative
+    // than slither's sc=6 for our smaller map). Then targetZoom = base/sc.
+    const sc=1+(me.r-6)*0.2;
+    const targetZoom=ZOOM_BASE/Math.max(1,sc);
+    // Very slow lerp — gradual camera pullback as you grow (slither feel)
+    ZOOM+=(targetZoom-ZOOM)*0.03;
   }
 
   const w2s=(wx,wy)=>[(wx-camX)*ZOOM+W/2,(wy-camY)*ZOOM+H/2];
