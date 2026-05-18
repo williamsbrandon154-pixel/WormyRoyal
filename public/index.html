@@ -1064,16 +1064,10 @@ function drawSnake(s,pts,isMe){
   ctx.stroke();
 
   // ===== HEAD OVERLAY (covers any body the head crosses during coil) =====
-  // Re-paints the head section ON TOP of any older body segments
-  // the head is currently overlapping — gives that slither.io look
-  // where the head leads the spiral.
-  // Outline first (same color/width as body outline → blends invisibly
-  // at the head-body junction, but covers body outline behind head)
-  traceHead();
-  ctx.lineWidth=baseR*2+4;
-  ctx.strokeStyle=outlineCol;
-  ctx.stroke();
-  // Head fill — same width as body fill
+  // No outline — would create a visible seam at the head-body junction.
+  // Just re-paint the FILL over the head region, so during coils the
+  // head fill covers older body segments. The eyes drawn last make
+  // the head visually identifiable.
   traceHead();
   ctx.lineWidth=baseR*2;
   ctx.strokeStyle=col;
