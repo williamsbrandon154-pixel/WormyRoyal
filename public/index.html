@@ -972,20 +972,15 @@ function drawSnake(s,pts,isMe){
       ctx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
     }
   }
-  function traceBody(){
-    if(headLen>=len-1){tracePath();return}
-    ctx.beginPath();
-    ctx.moveTo(pts[headLen][0],pts[headLen][1]);
-    for(let i=headLen;i<len-1;i++){
-      const mx=(pts[i][0]+pts[i+1][0])/2;
-      const my=(pts[i][1]+pts[i+1][1])/2;
-      ctx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
-    }
-  }
+  // Body = FULL continuous path (no seam). Head will draw on top.
+  function traceBody(){ tracePath(); }
+  // Head extends a few points PAST headLen so it cleanly covers
+  // the body underneath when coiling — no visible junction.
   function traceHead(){
+    const ext=Math.min(headLen+2,len-1);
     ctx.beginPath();
     ctx.moveTo(pts[0][0],pts[0][1]);
-    for(let i=0;i<headLen;i++){
+    for(let i=0;i<ext;i++){
       const mx=(pts[i][0]+pts[i+1][0])/2;
       const my=(pts[i][1]+pts[i+1][1])/2;
       ctx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
@@ -1022,12 +1017,12 @@ function drawSnake(s,pts,isMe){
   ctx.strokeStyle=col;
   ctx.stroke();
   // Body color rings (smooth alternating bands like slither.io)
+  // Start from 0 — head will draw on top and cover the head region
   if(pat==="striped"||pat==="gradient"){
     const bandSize=pat==="gradient"?5:4;
-    let i=headLen,bandIdx=Math.floor(headLen/bandSize);
+    let i=0,bandIdx=0;
     while(i<len-1){
       const end=Math.min(i+bandSize,len-1);
-      // Only draw the "lit" colored bands (skip every other one — base color shows through)
       if(bandIdx%2===1){
         ctx.beginPath();
         ctx.moveTo(pts[i][0],pts[i][1]);
