@@ -411,92 +411,53 @@ class Room {
       p._curSpeed += (targetSpeed - p._curSpeed) * 0.25;
       const speed = p._curSpeed;
 
-      // ===== HEAD: move smoothly forward each tick =====
+      // ===== HEAD: move smoothly forward, unshift new body points =====
+      // Use the queue-based approach (body = head's past positions
+      // sampled at POINT_STEP intervals). This makes the body TRACE
+      // the head's exact path — always smooth, no weird kinks during
+      // sharp turns. The spiral-tightening effect comes from the head
+      // itself spiraling inward (numerical integration of constant
+      // turn rate produces a slight inward spiral per tick).
       const head = p.points[0];
-      p.points[0] = {
-        x: head.x + Math.cos(p.heading) * speed,
-        y: head.y + Math.sin(p.heading) * speed,
-      };
+      const nx = head.x + Math.cos(p.heading) * speed;
+      const ny = head.y + Math.sin(p.heading) * speed;
 
-      // ===== ELASTIC BODY CHAIN (slither.io physics) =====
-      // Each segment pulls toward the segment ahead via the CHORD,
-      // maintaining POINT_STEP spacing. When the head turns, segments
-      // cut inside the curve — body lags and spirals inward when
-      // circling, exactly like slither.io. This is what makes coiling
-      // feel "alive" — the body has weight that drags behind.
-      for (let i = 1; i < p.points.length; i++) {
-        const ahead = p.points[i - 1];
-        const curr = p.points[i];
-        const dx = ahead.x - curr.x;
-        const dy = ahead.y - curr.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist > POINT_STEP) {
-          // Pull this segment along the chord toward ahead
-          p.points[i] = {
-            x: ahead.x - (dx / dist) * POINT_STEP,
-            y: ahead.y - (dy / dist) * POINT_STEP,
-          };
-        }
+      p._stepAcc += speed;
+      if (p._stepAcc >= POINT_STEP) {
+        p._stepAcc = 0;
+        p.points.unshift({ x: nx, y: ny });
+      } else {
+        p.points[0] = { x: nx, y: ny };
       }
 
-      // ===== TAIL: smooth display-length lerp =====
+      // ===== TAIL: smooth display-length lerp + sub-pixel trim =====
       const targetL = this.targetLen(p);
       if (p._displayLen == null) p._displayLen = targetL;
       p._displayLen += (targetL - p._displayLen) * 0.08;
       const want = p._displayLen;
 
-      // Current body length (sum of segment distances)
-      let curLen = 0;
+      // Walk the body from head to find where target length ends.
+      // Replace that segment with sub-pixel interpolation so the
+      // tail slides smoothly instead of snapping between points.
+      let acc = 0;
+      let trimAt = p.points.length;
       for (let i = 1; i < p.points.length; i++) {
-        curLen += Math.hypot(
+        const seg = Math.hypot(
           p.points[i].x - p.points[i-1].x,
           p.points[i].y - p.points[i-1].y
         );
-      }
-
-      // Grow at the tail: extrapolate from last-2 to last by POINT_STEP
-      while (curLen < want && p.points.length >= 2) {
-        const last = p.points[p.points.length - 1];
-        const prev = p.points[p.points.length - 2];
-        const tdx = last.x - prev.x;
-        const tdy = last.y - prev.y;
-        const td = Math.hypot(tdx, tdy);
-        if (td > 0.01) {
-          p.points.push({
-            x: last.x + (tdx / td) * POINT_STEP,
-            y: last.y + (tdy / td) * POINT_STEP,
-          });
-        } else {
-          p.points.push({
-            x: last.x - Math.cos(p.heading) * POINT_STEP,
-            y: last.y - Math.sin(p.heading) * POINT_STEP,
-          });
+        if (acc + seg >= want) {
+          const t = seg > 0 ? Math.max(0, Math.min(1, (want - acc) / seg)) : 0;
+          p.points[i] = {
+            x: p.points[i-1].x + (p.points[i].x - p.points[i-1].x) * t,
+            y: p.points[i-1].y + (p.points[i].y - p.points[i-1].y) * t,
+          };
+          trimAt = i + 1;
+          break;
         }
-        curLen += POINT_STEP;
+        acc += seg;
       }
-
-      // Trim at the tail with sub-pixel interpolation (no snapping)
-      if (curLen > want) {
-        let acc = 0;
-        let trimAt = p.points.length;
-        for (let i = 1; i < p.points.length; i++) {
-          const seg = Math.hypot(
-            p.points[i].x - p.points[i-1].x,
-            p.points[i].y - p.points[i-1].y
-          );
-          if (acc + seg >= want) {
-            const t = seg > 0 ? Math.max(0, Math.min(1, (want - acc) / seg)) : 0;
-            p.points[i] = {
-              x: p.points[i-1].x + (p.points[i].x - p.points[i-1].x) * t,
-              y: p.points[i-1].y + (p.points[i].y - p.points[i-1].y) * t,
-            };
-            trimAt = i + 1;
-            break;
-          }
-          acc += seg;
-        }
-        if (trimAt < p.points.length) p.points.length = trimAt;
-      }
+      if (trimAt < p.points.length) p.points.length = trimAt;
     }
 
     /* 3. Eating + Magnet + Power-up pickup */
