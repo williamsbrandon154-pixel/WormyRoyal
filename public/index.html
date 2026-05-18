@@ -435,7 +435,7 @@ const SNAP_MAX=12;
 const RENDER_DELAY=80; // ms behind latest snapshot
 let camX=0,camY=0;
 const isTouch=matchMedia("(pointer:coarse)").matches;
-const ZOOM=1.5;
+const ZOOM=isTouch?1.1:1.5; // less zoom on mobile so you can see more
 function addSnap(s){s._t=performance.now();snapBuf.push(s);if(snapBuf.length>SNAP_MAX)snapBuf.shift()}
 function getBracket(){
   const rt=performance.now()-RENDER_DELAY;
@@ -474,8 +474,8 @@ function handle(m){
     case"you":amAlive=m.alive;$("spec").classList.toggle("on",!amAlive&&$("hud").classList.contains("on"));break;
     case"state":addSnap(m);$("hud").classList.add("on");hideScreens();updateHUD(m);$("warn").classList.remove("show");break;
     case"died":amAlive=false;$("spec").classList.add("on");stopBoostSound();playDeathSound();break;
-    case"powerup":activePowerup=m.type;activePowerupEnd=performance.now()+(m.type==="invincible"?10000:15000);playPowerupSound(m.type);break;
-    case"roundover":$("hud").classList.remove("on");$("spec").classList.remove("on");activePowerup=null;if(m.ended){hideWinAnimation()}else{showWinAnimation(m.winner,m.winnerId===myId)}break;
+    case"powerup":activePowerups.push({type:m.type,end:performance.now()+(m.type==="invincible"?10000:15000)});playPowerupSound(m.type);break;
+    case"roundover":$("hud").classList.remove("on");$("spec").classList.remove("on");activePowerups=[];if(m.ended){hideWinAnimation()}else{showWinAnimation(m.winner,m.winnerId===myId)}break;
   }
 }
 let _hudTick=0;
@@ -609,7 +609,7 @@ function stopBoostSound(){
 }
 
 let lastMass=0;
-let activePowerup=null,activePowerupEnd=0;
+let activePowerups=[]; // array of {type, end}
 
 function playPowerupSound(type){
   const ac=getAudio();
@@ -782,8 +782,16 @@ addEventListener("mousedown",()=>boosting=true);
 addEventListener("mouseup",()=>boosting=false);
 addEventListener("keydown",e=>{if(e.code==="Space")boosting=true});
 addEventListener("keyup",e=>{if(e.code==="Space")boosting=false});
-cv.addEventListener("touchstart",e=>{pt(e.touches[0].clientX,e.touches[0].clientY)},{passive:true});
-cv.addEventListener("touchmove",e=>{pt(e.touches[0].clientX,e.touches[0].clientY)},{passive:true});
+cv.addEventListener("touchstart",e=>{
+  pt(e.touches[0].clientX,e.touches[0].clientY);
+  if(e.touches.length>=2)boosting=true; // second finger = boost
+},{passive:true});
+cv.addEventListener("touchmove",e=>{
+  pt(e.touches[0].clientX,e.touches[0].clientY);
+},{passive:true});
+cv.addEventListener("touchend",e=>{
+  if(e.touches.length<2)boosting=false; // released second finger
+},{passive:true});
 if(isTouch){$("boost").classList.add("touch");$("boost").ontouchstart=e=>{e.preventDefault();boosting=true};$("boost").ontouchend=e=>{e.preventDefault();boosting=false}}
 setInterval(()=>{
   if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"input",angle:aim,boost:boosting}));
@@ -945,7 +953,7 @@ function drawSnake(s,pts,isMe){
   }
 
   // INVINCIBLE GLOW (golden outline behind everything)
-  if(s.pu==="invincible"){
+  if(s.pu&&s.pu.includes("invincible")){
     tracePath();
     const flk=Math.sin(performance.now()*0.008)*0.3+0.5;
     ctx.lineWidth=baseR*2+12;ctx.strokeStyle=`rgba(255,215,0,${flk})`;ctx.stroke();
@@ -1109,21 +1117,32 @@ function render(){
     }
   }
 
+  // Dark overlay outside border
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0,0,W,H);
+  ctx.arc(cx,cy,br,0,Math.PI*2,true); // cut out the inside
+  ctx.fillStyle="rgba(0,0,0,0.45)";
+  ctx.fill();
+  ctx.restore();
+
   // Border ring
   ctx.beginPath();ctx.arc(cx,cy,br,0,Math.PI*2);
   ctx.strokeStyle="rgba(200,40,50,0.7)";ctx.lineWidth=3;ctx.stroke();
   ctx.beginPath();ctx.arc(cx,cy,br+5,0,Math.PI*2);
   ctx.strokeStyle="rgba(200,40,50,0.2)";ctx.lineWidth=10;ctx.stroke();
 
-  // Snakes — smooth interpolation with tail handling
+  // Snakes — smooth interpolation with stable tail
   for(const s of next.s){
     const ps=findSn(prev,s.id);
     const pts=[];
-    // Use the shorter point count to avoid tail jumping
     const nLen=s.p.length;
     const pLen=ps?ps.p.length:0;
+    // Use shorter count minus 2 to avoid the glitchy tail tip
     const useLen=Math.min(nLen,pLen||nLen);
-    for(let i=0;i<useLen;i+=2){
+    const safeLen=Math.max(4,useLen-2);
+    for(let i=0;i<safeLen;i+=2){
+      if(i>=nLen)break;
       let wx=s.p[i],wy=s.p[i+1];
       if(ps&&i<pLen){
         wx=ps.p[i]+(s.p[i]-ps.p[i])*a;
@@ -1134,25 +1153,28 @@ function render(){
     if(pts.length>1)drawSnake(s,pts,s.id===myId);
   }
 
-  // Active power-up HUD bar
-  if(activePowerup&&performance.now()<activePowerupEnd){
-    const remain=(activePowerupEnd-performance.now())/1000;
-    const total=activePowerup==="invincible"?10:15;
-    const pct=remain/total;
+  // Active power-up HUD bars (compound — show all)
+  activePowerups=activePowerups.filter(p=>performance.now()<p.end);
+  if(activePowerups.length>0){
     const puLabels={jumbo:"JUMBO",magnet:"MAGNET",boostme:"BOOST ME",invincible:"INVINCIBLE"};
     const puCols={jumbo:"#ff9f1c",magnet:"#7c5cff",boostme:"#43c6ff",invincible:"#ffd700"};
-    const barW=200,barH=20,barX=W/2-barW/2,barY=H-60;
-    ctx.fillStyle="rgba(0,0,0,0.5)";ctx.fillRect(barX-2,barY-2,barW+4,barH+4);
-    ctx.fillStyle=puCols[activePowerup]||"#fff";ctx.fillRect(barX,barY,barW*pct,barH);
-    ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.strokeRect(barX-2,barY-2,barW+4,barH+4);
-    ctx.fillStyle="#fff";ctx.font="bold 13px Nunito,sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
-    ctx.fillText((puLabels[activePowerup]||"")+" "+remain.toFixed(1)+"s",W/2,barY+barH/2);
-  } else if(activePowerup&&performance.now()>=activePowerupEnd){
-    activePowerup=null;
+    const barW=180,barH=16;
+    for(let pi=0;pi<activePowerups.length;pi++){
+      const ap=activePowerups[pi];
+      const remain=(ap.end-performance.now())/1000;
+      const total=ap.type==="invincible"?10:15;
+      const pct=remain/total;
+      const barX=W/2-barW/2,barY=H-55-pi*22;
+      ctx.fillStyle="rgba(0,0,0,0.5)";ctx.fillRect(barX-2,barY-2,barW+4,barH+4);
+      ctx.fillStyle=puCols[ap.type]||"#fff";ctx.fillRect(barX,barY,barW*pct,barH);
+      ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.strokeRect(barX-2,barY-2,barW+4,barH+4);
+      ctx.fillStyle="#fff";ctx.font="bold 11px Nunito,sans-serif";ctx.textAlign="center";ctx.textBaseline="middle";
+      ctx.fillText((puLabels[ap.type]||"")+" "+remain.toFixed(1)+"s",W/2,barY+barH/2);
+    }
   }
 
   // Invincible shimmer on own snake
-  if(activePowerup==="invincible"&&me){
+  if(activePowerups.some(p=>p.type==="invincible")&&me){
     const[shx,shy]=w2s(me.p[0],me.p[1]);
     const shimR=me.r*ZOOM*2.5;
     const shimGrad=ctx.createRadialGradient(shx,shy,0,shx,shy,shimR);

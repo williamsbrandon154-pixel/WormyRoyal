@@ -160,8 +160,7 @@ class Room {
     p._curSpeed = BASE_SPEED;
     p._stormTicks = 0;
     p._boostTicks = 0;
-    p.powerup = null;       // active power-up type
-    p.powerupUntil = 0;     // when it expires
+    p.powerups = [];        // array of {type, until}
     p.points = [];
     for (let i = 0; i < 12; i++) {
       p.points.push({
@@ -171,9 +170,11 @@ class Room {
     }
   }
 
+  hasPowerup(p, type) { return p.powerups.some(pu => pu.type === type); }
+
   snakeRadius(p) {
     let r = SNAKE_BASE_R + Math.min(p.mass * 0.05, 13);
-    if (p.powerup === "jumbo") r *= 1.8;
+    if (this.hasPowerup(p, "jumbo")) r *= 1.8;
     return r;
   }
   targetLen(p)   { return 70 + p.mass * 4.0; }
@@ -349,7 +350,7 @@ class Room {
       if (!p.alive) continue;
 
       // Expire power-ups
-      if (p.powerup && now >= p.powerupUntil) p.powerup = null;
+      p.powerups = p.powerups.filter(pu => now < pu.until);
 
       const d = angleDelta(p.heading, p.targetAngle);
       p.heading += Math.max(-TURN_RATE, Math.min(TURN_RATE, d));
@@ -359,12 +360,12 @@ class Room {
         targetSpeed = BOOST_SPEED * this.settings.boostSpeed;
         p._boostTicks++;
         const compound = 1 + p._boostTicks * 0.003; // slow compounding drain
-        if (p.powerup === "boostme") {
+        if (this.hasPowerup(p, "boostme")) {
           // No mass loss while boostme is active
         } else {
           p.mass -= BOOST_DRAIN * compound;
         }
-        if (Math.random() < 0.16 && p.powerup !== "boostme") {
+        if (Math.random() < 0.16 && !this.hasPowerup(p, "boostme")) {
           const tail = p.points[p.points.length - 1];
           if (tail) this.food.push({ x: tail.x, y: tail.y });
         }
@@ -403,7 +404,7 @@ class Room {
       const er2 = eatR * eatR;
 
       // Magnet: pull nearby food toward head
-      if (p.powerup === "magnet") {
+      if (this.hasPowerup(p, "magnet")) {
         const magnetR2 = 22500; // ~150px radius
         for (const f of this.food) {
           const d2 = dist2(h.x, h.y, f.x, f.y);
@@ -424,12 +425,12 @@ class Room {
         }
       }
 
-      // Power-up pickup
+      // Power-up pickup (compound — can have multiple)
       for (let i = this.powerups.length - 1; i >= 0; i--) {
         const pu = this.powerups[i];
         if (dist2(h.x, h.y, pu.x, pu.y) < 900) { // ~30px radius
-          p.powerup = pu.type;
-          p.powerupUntil = now + (pu.type === "invincible" ? 10000 : 15000);
+          const duration = pu.type === "invincible" ? 10000 : 15000;
+          p.powerups.push({ type: pu.type, until: now + duration });
           if (pu.type === "jumbo") p.mass *= 4;
           this.powerups.splice(i, 1);
           this.send(p, { t: "powerup", type: pu.type });
@@ -447,6 +448,19 @@ class Room {
         if (Math.random() < 0.4) this.food.push(this.randFoodInBorder());
       }
     }
+    // Remove power-ups outside the border — 35% chance to respawn inside
+    for (let i = this.powerups.length - 1; i >= 0; i--) {
+      const pu = this.powerups[i];
+      if (dist2(pu.x, pu.y, this.borderCenterX, this.borderCenterY) > br2) {
+        this.powerups.splice(i, 1);
+        if (Math.random() < 0.35) {
+          const types = ["jumbo", "magnet", "boostme", "invincible"];
+          const type = types[Math.floor(Math.random() * types.length)];
+          const pos = this.randFoodInBorder();
+          this.powerups.push({ x: pos.x, y: pos.y, type });
+        }
+      }
+    }
     const foodTarget = Math.round(FOOD_TARGET * this.settings.foodRate);
     while (this.food.length < foodTarget) this.food.push(this.randFoodInBorder());
 
@@ -459,7 +473,7 @@ class Room {
       const distFromCenter = Math.hypot(h.x - this.borderCenterX, h.y - this.borderCenterY);
       if (distFromCenter > this.borderR) {
         p._stormTicks++;
-        if (p.powerup !== "invincible") {
+        if (!this.hasPowerup(p, "invincible")) {
           const rampUp = 1 + p._stormTicks * 0.08;
           p.mass -= BORDER_DRAIN * rampUp;
           if (Math.random() < 0.15) {
@@ -484,7 +498,7 @@ class Room {
         const l2 = lethal * lethal;
         for (let i = 0; i < q.points.length; i += 2) {
           if (dist2(h.x, h.y, q.points[i].x, q.points[i].y) < l2) {
-            if (p.powerup === "invincible") {
+            if (this.hasPowerup(p, "invincible")) {
               // Bounce away from the collision point
               const cx = q.points[i].x, cy = q.points[i].y;
               const dx = h.x - cx, dy = h.y - cy;
@@ -545,7 +559,7 @@ class Room {
         r: Math.round(this.snakeRadius(p)),
         m: Math.round(p.mass), p: pts,
         b: p.boost && p.mass > BOOST_MIN_MASS ? 1 : 0,
-        pu: p.powerup || null,
+        pu: p.powerups.map(x => x.type),
       });
     }
 
