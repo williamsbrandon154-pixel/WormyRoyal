@@ -547,10 +547,34 @@ function renderLobby(m){
 function esc(s){return s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
 function hideScreens(){$("mainMenuScr").classList.add("hide");$("privateScr").classList.add("hide");$("lobbyScr").classList.add("hide")}
 let cdT=null,winShowing=false;
+function playCountBeep(isGo){
+  const ac=getAudio();
+  const t=ac.currentTime;
+  const osc=ac.createOscillator();
+  osc.type="sine";
+  if(isGo){
+    osc.frequency.setValueAtTime(880,t);
+    osc.frequency.setValueAtTime(1100,t+0.08);
+    osc.frequency.setValueAtTime(1320,t+0.16);
+  } else {
+    osc.frequency.setValueAtTime(660,t);
+  }
+  const g=ac.createGain();
+  g.gain.setValueAtTime(isGo?0.18:0.12,t);
+  g.gain.exponentialRampToValueAtTime(0.001,t+(isGo?0.35:0.2));
+  osc.connect(g);g.connect(ac.destination);
+  osc.start(t);osc.stop(t+(isGo?0.4:0.25));
+}
 function countdown(ms){
   const w=$("warn");let left=Math.ceil(ms/1000);
   w.style.color="#6FD3A6";w.style.textShadow="0 0 16px #6FD3A6";
-  const tick=()=>{w.textContent=left>0?left:"GO!";w.classList.add("show");if(left<0){w.classList.remove("show");clearInterval(cdT);cdT=null;w.style.color="";w.style.textShadow="";return}left--};
+  const tick=()=>{
+    w.textContent=left>0?left:"GO!";w.classList.add("show");
+    if(left>0)playCountBeep(false);
+    else if(left===0)playCountBeep(true);
+    if(left<0){w.classList.remove("show");clearInterval(cdT);cdT=null;w.style.color="";w.style.textShadow="";return}
+    left--;
+  };
   tick();clearInterval(cdT);cdT=setInterval(tick,1000);
 }
 
