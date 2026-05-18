@@ -1102,9 +1102,24 @@ function drawSnake(s,pts,isMe){
   ctx.strokeStyle=`rgba(255,255,255,0.35)`;
   ctx.stroke();
 
-  // Eyes — slither.io style: large round whites with offset pupils
+  // === HEAD BULGE === — subtle slightly-larger circle at the head tip
+  // Makes the head visually stand out, especially when coiling
   const[hx,hy]=pts[0];
   const dir=Math.atan2(pts[0][1]-pts[Math.min(3,len-1)][1],pts[0][0]-pts[Math.min(3,len-1)][0]);
+  const headR=baseR*1.08;
+  // Subtle outline rim
+  ctx.beginPath();ctx.arc(hx,hy,headR+1.5,0,Math.PI*2);
+  ctx.fillStyle=outlineCol;ctx.fill();
+  // Main head fill
+  ctx.beginPath();ctx.arc(hx,hy,headR,0,Math.PI*2);
+  ctx.fillStyle=col;ctx.fill();
+  // Glossy top-left highlight
+  const shineX=hx-Math.cos(dir-Math.PI/2)*headR*0.3;
+  const shineY=hy-Math.sin(dir-Math.PI/2)*headR*0.3;
+  ctx.beginPath();ctx.arc(shineX,shineY,headR*0.45,0,Math.PI*2);
+  ctx.fillStyle="rgba(255,255,255,0.28)";ctx.fill();
+
+  // Eyes — slither.io style: large round whites with offset pupils
   const eyeR=baseR*.42;
   // Aim pupils toward the target/mouse for that lively slither.io look
   let aimDir=dir;
@@ -1257,18 +1272,29 @@ function render(){
   ctx.strokeStyle=`rgba(255,200,210,${pulseA*0.4})`;
   ctx.lineWidth=1;ctx.stroke();
 
-  // Snakes — smooth interpolation throughout. Server now sends a smooth
-  // sub-pixel tail position, so we can interpolate all points cleanly.
+  // Snakes — smooth interpolation throughout. Server sends sub-pixel tail.
+  // When next has MORE points than prev (the body grew by a new tail point),
+  // we interp the "extra" points from prev's last position so they smoothly
+  // fade in — no abrupt appearance.
   for(const s of next.s){
     const ps=findSn(prev,s.id);
     const pts=[];
     const nLen=s.p.length;
     const pLen=ps?ps.p.length:0;
+    // Prev's tail position (fallback for missing prev indices)
+    const ptailX=pLen>=2?ps.p[pLen-2]:0;
+    const ptailY=pLen>=2?ps.p[pLen-1]:0;
     for(let i=0;i<nLen;i+=2){
       let wx=s.p[i],wy=s.p[i+1];
-      if(ps&&i<pLen){
-        wx=ps.p[i]+(s.p[i]-ps.p[i])*a;
-        wy=ps.p[i+1]+(s.p[i+1]-ps.p[i+1])*a;
+      if(ps){
+        if(i<pLen){
+          wx=ps.p[i]+(s.p[i]-ps.p[i])*a;
+          wy=ps.p[i+1]+(s.p[i+1]-ps.p[i+1])*a;
+        }else if(pLen>=2){
+          // Extra point — smoothly fade in from prev's tail
+          wx=ptailX+(s.p[i]-ptailX)*a;
+          wy=ptailY+(s.p[i+1]-ptailY)*a;
+        }
       }
       pts.push(w2s(wx,wy));
     }

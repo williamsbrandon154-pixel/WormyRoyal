@@ -369,10 +369,11 @@ class Room {
 
       const d = angleDelta(p.heading, p.targetAngle);
       // Slither.io: CONSTANT turn rate regardless of size.
-      // The "big snake wide radius" feel comes purely from the body
-      // trail taking time to catch up to the head — not from a slower
-      // angular rate. Tuned to ~310°/s which matches slither.io feel.
-      const turnRate = 0.18;
+      // Big snakes still turn easily — the "wide radius" feel comes
+      // purely from the body trail taking time to catch up to the
+      // head, not from a slower angular rate.
+      // 0.22 rad/tick (~6.6 rad/s = ~378°/s) = snappy slither feel.
+      const turnRate = 0.22;
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
 
       let targetSpeed = BASE_SPEED * this.settings.snakeSpeed;
@@ -408,13 +409,12 @@ class Room {
 
       // Slither.io style smooth tail: interpolate the last point to
       // sub-pixel precision so it doesn't snap between body points.
-      // Walk the body, find where target length ends, replace that
-      // point with an interpolated tail position.
-      // Also smoothly lerp display length toward target — so eating
-      // food makes you grow gradually, not in a single 4px jump.
+      // Also smoothly lerp display length toward target — slower lerp
+      // (8% per tick = ~0.5s catchup) gives slither.io's signature
+      // gradual growing animation.
       const targetL = this.targetLen(p);
       if (p._displayLen == null) p._displayLen = targetL;
-      p._displayLen += (targetL - p._displayLen) * 0.12;
+      p._displayLen += (targetL - p._displayLen) * 0.08;
       let acc = 0, want = p._displayLen;
       let trimAt = p.points.length;
       for (let i = 1; i < p.points.length; i++) {
