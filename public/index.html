@@ -435,7 +435,7 @@ const SNAP_MAX=12;
 const RENDER_DELAY=80; // ms behind latest snapshot
 let camX=0,camY=0;
 const isTouch=matchMedia("(pointer:coarse)").matches;
-const ZOOM=isTouch?0.55:1.5; // very wide view on mobile
+const ZOOM=isTouch?0.30:1.5; // ultra wide view on mobile
 function addSnap(s){s._t=performance.now();snapBuf.push(s);if(snapBuf.length>SNAP_MAX)snapBuf.shift()}
 function getBracket(){
   const rt=performance.now()-RENDER_DELAY;
