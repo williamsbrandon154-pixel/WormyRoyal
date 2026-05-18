@@ -358,9 +358,9 @@ class Room {
       p.powerups = p.powerups.filter(pu => now < pu.until);
 
       const d = angleDelta(p.heading, p.targetAngle);
-      // Slither.io style: constant turn rate, bigger = slower turn = wider radius
-      // This naturally makes the head stick out when coiling
-      const turnRate = Math.max(0.06, 0.14 - p.mass * 0.0006);
+      // Small snakes turn super fast (snappy); bigger = wider radius
+      // Base 0.26 rad/tick (~450°/s) → scales down to 0.06 floor for huge snakes
+      const turnRate = Math.max(0.06, 0.26 - p.mass * 0.0009);
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
 
       let targetSpeed = BASE_SPEED * this.settings.snakeSpeed;
