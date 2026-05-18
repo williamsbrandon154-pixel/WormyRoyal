@@ -837,22 +837,26 @@ $("setBoost").onchange=sendSettings;
 $("setFood").onchange=sendSettings;
 function findSn(snap,id){if(!snap)return null;for(const s of snap.s)if(s.id===id)return s;return null}
 
-// ===== PRE-RENDER: DARK HEX TILE (slither.io style) =====
+// ===== PRE-RENDER: DARK HEX TILE (slither.io style, seamless) =====
 let hexTile=null;
 const HEX_FLAT=64;
 function buildHexTile(){
+  // Pointy-left/right hex with flat top/bottom.
+  // R = circumradius (corner-to-center distance), s = half flat-height.
+  const R=HEX_FLAT/Math.sqrt(3);
   const s=HEX_FLAT/2;
-  const R=s/Math.cos(Math.PI/6);
-  const h=s*2;
-  const colW=R*1.5;
+  const h=s*2;          // full flat-to-flat height
+  const colW=R*1.5;     // horizontal column spacing
 
-  const tW=Math.ceil(colW*2)+4;
-  const tH=Math.ceil(h*2)+4;
+  // Pattern period: 2 columns horizontally × 1 full row vertically.
+  // Tile dims must be EXACTLY the pattern period for seamless wrap.
+  const tW=Math.round(colW*2);
+  const tH=Math.round(h);
   const c=document.createElement("canvas");
   c.width=tW;c.height=tH;
   const x=c.getContext("2d");
 
-  // Deep space-blue base (slither.io vibe)
+  // Deep space-blue base
   x.fillStyle="#0a0f1a";
   x.fillRect(0,0,tW,tH);
 
@@ -866,42 +870,42 @@ function buildHexTile(){
     x.closePath();
   }
 
-  for(let col=0;col<2;col++){
-    for(let row=0;row<2;row++){
-      const cx=col*colW+R+2;
-      const cy=row*h+s+(col%2?s:0)+2;
-      const hr=R-1;
+  function drawHex(cx,cy){
+    const hr=R-0.5;
+    // Hex fill — radial gradient gives "lit center" feel
+    x.save();
+    hexPath(cx,cy,hr);
+    x.clip();
+    const rg=x.createRadialGradient(cx,cy-s*0.3,2,cx,cy,R);
+    rg.addColorStop(0,"rgba(28,38,58,1)");
+    rg.addColorStop(0.6,"rgba(18,26,42,1)");
+    rg.addColorStop(1,"rgba(12,18,30,1)");
+    x.fillStyle=rg;
+    x.fillRect(cx-R-1,cy-h/2-1,R*2+2,h+2);
+    // Top-rim highlight gradient
+    const lg=x.createLinearGradient(cx,cy-s,cx,cy+s);
+    lg.addColorStop(0,"rgba(120,150,200,0.18)");
+    lg.addColorStop(0.4,"rgba(60,80,120,0.04)");
+    lg.addColorStop(1,"rgba(0,0,0,0.15)");
+    x.fillStyle=lg;
+    x.fillRect(cx-R-1,cy-h/2-1,R*2+2,h+2);
+    x.restore();
+    // Crisp blue edge line
+    hexPath(cx,cy,hr);
+    x.strokeStyle="rgba(70,95,140,0.55)";
+    x.lineWidth=1.2;
+    x.stroke();
+  }
 
-      // Hex fill — radial gradient gives it a "lit center" feel
-      x.save();
-      hexPath(cx,cy,hr);
-      x.clip();
-      const rg=x.createRadialGradient(cx,cy-s*0.3,2,cx,cy,R);
-      rg.addColorStop(0,"rgba(28,38,58,1)");
-      rg.addColorStop(0.6,"rgba(18,26,42,1)");
-      rg.addColorStop(1,"rgba(12,18,30,1)");
-      x.fillStyle=rg;
-      x.fillRect(cx-R-1,cy-h/2-1,R*2+2,h+2);
-      x.restore();
-
-      // Bright top-rim highlight (slither.io's signature lit edges)
-      x.save();
-      hexPath(cx,cy,hr);
-      x.clip();
-      const lg=x.createLinearGradient(cx,cy-s,cx,cy+s);
-      lg.addColorStop(0,"rgba(120,150,200,0.18)");
-      lg.addColorStop(0.4,"rgba(60,80,120,0.04)");
-      lg.addColorStop(1,"rgba(0,0,0,0.15)");
-      x.fillStyle=lg;
-      x.fillRect(cx-R-1,cy-h/2-1,R*2+2,h+2);
-      x.restore();
-
-      // Crisp blue-tinted edge line
-      hexPath(cx,cy,hr);
-      x.strokeStyle="rgba(70,95,140,0.55)";
-      x.lineWidth=1.2;
-      x.stroke();
-    }
+  // Draw hexes at every column position, with vertical offset on odd columns.
+  // We draw 1 row above + 1 row below the tile so wrap-around hexes are
+  // captured at the edges — making the pattern seamless when tiled.
+  // Column 0 (even): hexes at y = 0, h (no offset)
+  // Column 1 (odd):  hexes at y = h/2, h*1.5 (offset by h/2)
+  for(let row=-1;row<=1;row++){
+    drawHex(0,         row*h);          // col 0 (also wraps to x=tW)
+    drawHex(tW,        row*h);          // col 0 right-edge wrap
+    drawHex(colW,      row*h+s);        // col 1 (centered in tile)
   }
   hexTile=c;
   hexTile._colW=colW;
@@ -913,16 +917,22 @@ buildHexTile();
 let hexPattern=null;
 
 function drawGrid(W,H){
-  if(!hexPattern||hexPattern._z!==ZOOM) {hexPattern=ctx.createPattern(hexTile,"repeat");hexPattern._z=ZOOM;}
+  if(!hexPattern||hexPattern._z!==ZOOM){hexPattern=ctx.createPattern(hexTile,"repeat");hexPattern._z=ZOOM;}
   ctx.save();
   const sc=ZOOM;
-  const offX=-((camX*sc)%(hexTile._colW*2*sc));
-  const offY=-((camY*sc)%(hexTile._rowH*2*sc));
-  ctx.translate(offX,offY);
+  // Align pattern to world coords so it scrolls smoothly with the camera.
+  // We translate to camera space, then scale; the pattern repeats infinitely.
+  ctx.translate(W/2,H/2);
   ctx.scale(sc,sc);
+  ctx.translate(-camX,-camY);
+  // Compute world-space rect covering the entire viewport
+  const margin=Math.max(hexTile._tW,hexTile._tH);
+  const wx=camX-W/(2*sc)-margin;
+  const wy=camY-H/(2*sc)-margin;
+  const ww=W/sc+margin*2;
+  const wh=H/sc+margin*2;
   ctx.fillStyle=hexPattern;
-  const invSc=1/sc;
-  ctx.fillRect((-hexTile._tW-offX)*invSc,(-hexTile._tH-offY)*invSc,(W+hexTile._tW*2)*invSc,(H+hexTile._tH*2)*invSc);
+  ctx.fillRect(wx,wy,ww,wh);
   ctx.restore();
 }
 
