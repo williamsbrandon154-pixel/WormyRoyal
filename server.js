@@ -160,7 +160,6 @@ class Room {
     p._curSpeed = BASE_SPEED;
     p._stormTicks = 0;
     p._boostTicks = 0;
-    p._tightTurnTicks = 0;
     p.powerups = [];        // array of {type, until}
     p.points = [];
     for (let i = 0; i < 12; i++) {
@@ -359,21 +358,10 @@ class Room {
       p.powerups = p.powerups.filter(pu => now < pu.until);
 
       const d = angleDelta(p.heading, p.targetAngle);
-      // Bigger snakes turn slower — ranges from 0.22 (small) to 0.08 (huge)
-      let turnRate = Math.max(0.08, TURN_RATE - p.mass * 0.0012);
-      // After 1.5s of tight turning, turn rate degrades (can't coil perfectly)
-      if (p._tightTurnTicks > 45) {
-        const penalty = Math.min(0.6, (p._tightTurnTicks - 45) * 0.008);
-        turnRate *= (1 - penalty);
-      }
+      // Slither.io style: constant turn rate, bigger = slower turn = wider radius
+      // This naturally makes the head stick out when coiling
+      const turnRate = Math.max(0.06, 0.14 - p.mass * 0.0006);
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
-
-      // Prevent perfect coiling: if turning hard for too long, turn rate degrades
-      if (Math.abs(d) > turnRate * 0.8) {
-        p._tightTurnTicks++;
-      } else {
-        p._tightTurnTicks = Math.max(0, p._tightTurnTicks - 3);
-      }
 
       let targetSpeed = BASE_SPEED * this.settings.snakeSpeed;
       if (p.boost && p.mass > BOOST_MIN_MASS) {
