@@ -839,13 +839,12 @@ function findSn(snap,id){if(!snap)return null;for(const s of snap.s)if(s.id===id
 
 // ===== PRE-RENDER: DARK HEX TILE (slither.io style) =====
 let hexTile=null;
-const HEX_FLAT=72;
+const HEX_FLAT=64;
 function buildHexTile(){
   const s=HEX_FLAT/2;
   const R=s/Math.cos(Math.PI/6);
   const h=s*2;
   const colW=R*1.5;
-  const gap=3;
 
   const tW=Math.ceil(colW*2)+4;
   const tH=Math.ceil(h*2)+4;
@@ -853,8 +852,8 @@ function buildHexTile(){
   c.width=tW;c.height=tH;
   const x=c.getContext("2d");
 
-  // Fill entire tile with background color first
-  x.fillStyle="#101520";
+  // Deep space-blue base (slither.io vibe)
+  x.fillStyle="#0a0f1a";
   x.fillRect(0,0,tW,tH);
 
   function hexPath(cx,cy,r){
@@ -871,36 +870,36 @@ function buildHexTile(){
     for(let row=0;row<2;row++){
       const cx=col*colW+R+2;
       const cy=row*h+s+(col%2?s:0)+2;
-      const hr=R-gap/2;
+      const hr=R-1;
 
-      // Dark hex fill (slightly lighter than bg)
-      hexPath(cx,cy,hr);
-      x.fillStyle="#161d2a";
-      x.fill();
-
-      // Top-left edge highlight (very subtle)
+      // Hex fill — radial gradient gives it a "lit center" feel
       x.save();
       hexPath(cx,cy,hr);
       x.clip();
-      const hg=x.createLinearGradient(cx-R,cy-s,cx+R*0.5,cy+s*0.5);
-      hg.addColorStop(0,"rgba(45,55,75,0.35)");
-      hg.addColorStop(0.35,"rgba(35,45,60,0.12)");
-      hg.addColorStop(0.6,"transparent");
-      hg.addColorStop(1,"rgba(0,0,0,0.2)");
-      x.fillStyle=hg;
-      x.fillRect(cx-R,cy-s,R*2,s*2);
+      const rg=x.createRadialGradient(cx,cy-s*0.3,2,cx,cy,R);
+      rg.addColorStop(0,"rgba(28,38,58,1)");
+      rg.addColorStop(0.6,"rgba(18,26,42,1)");
+      rg.addColorStop(1,"rgba(12,18,30,1)");
+      x.fillStyle=rg;
+      x.fillRect(cx-R-1,cy-h/2-1,R*2+2,h+2);
       x.restore();
 
-      // Edge line (very dark, subtle)
+      // Bright top-rim highlight (slither.io's signature lit edges)
+      x.save();
       hexPath(cx,cy,hr);
-      x.strokeStyle="rgba(20,28,40,0.8)";
-      x.lineWidth=1.5;
-      x.stroke();
+      x.clip();
+      const lg=x.createLinearGradient(cx,cy-s,cx,cy+s);
+      lg.addColorStop(0,"rgba(120,150,200,0.18)");
+      lg.addColorStop(0.4,"rgba(60,80,120,0.04)");
+      lg.addColorStop(1,"rgba(0,0,0,0.15)");
+      x.fillStyle=lg;
+      x.fillRect(cx-R-1,cy-h/2-1,R*2+2,h+2);
+      x.restore();
 
-      // Inner edge highlight (top edges only)
-      hexPath(cx,cy,hr-1);
-      x.strokeStyle="rgba(40,50,68,0.25)";
-      x.lineWidth=0.5;
+      // Crisp blue-tinted edge line
+      hexPath(cx,cy,hr);
+      x.strokeStyle="rgba(70,95,140,0.55)";
+      x.lineWidth=1.2;
       x.stroke();
     }
   }
@@ -1153,7 +1152,7 @@ function render(){
   // Render fireworks overlay if active
   if(fwParticles.length>0)renderFireworks();
 
-  if(!bracket){ctx.fillStyle="#0b1018";ctx.fillRect(0,0,W,H);return}
+  if(!bracket){ctx.fillStyle="#0a0f1a";ctx.fillRect(0,0,W,H);return}
   const{prev,next,t}=bracket;
   const a=Math.max(0,Math.min(1,t)); // always 0-1, never extrapolate
 
@@ -1169,7 +1168,7 @@ function render(){
 
   const w2s=(wx,wy)=>[(wx-camX)*ZOOM+W/2,(wy-camY)*ZOOM+H/2];
 
-  ctx.fillStyle="#0b1018";
+  ctx.fillStyle="#0a0f1a";
   ctx.fillRect(0,0,W,H);
 
   const bcx=next.bcx||0,bcy=next.bcy||0;
@@ -1177,6 +1176,14 @@ function render(){
   const br=next.br*ZOOM;
 
   drawGrid(W,H);
+
+  // Subtle radial vignette — darkens edges of the playable area
+  const vg=ctx.createRadialGradient(cx,cy,br*0.55,cx,cy,br*1.1);
+  vg.addColorStop(0,"rgba(0,0,0,0)");
+  vg.addColorStop(0.7,"rgba(0,0,0,0.12)");
+  vg.addColorStop(1,"rgba(0,0,0,0.35)");
+  ctx.fillStyle=vg;
+  ctx.fillRect(0,0,W,H);
 
   // Food (glowing orbs — use pre-rendered sprites for performance)
   for(let i=0;i<next.f.length;i+=2){
@@ -1213,20 +1220,34 @@ function render(){
     }
   }
 
-  // Dark overlay outside border
+  // Dark overlay outside border (slither.io death-zone look)
   ctx.save();
   ctx.beginPath();
   ctx.rect(0,0,W,H);
   ctx.arc(cx,cy,br,0,Math.PI*2,true); // cut out the inside
-  ctx.fillStyle="rgba(0,0,0,0.45)";
+  ctx.fillStyle="rgba(0,0,0,0.6)";
   ctx.fill();
   ctx.restore();
 
-  // Border ring
+  // Glowing red border ring (animated pulse)
+  const pulseT=performance.now()*0.003;
+  const pulseA=0.55+Math.sin(pulseT)*0.15;
+  // Outer wide glow
+  ctx.beginPath();ctx.arc(cx,cy,br+12,0,Math.PI*2);
+  ctx.strokeStyle=`rgba(255,60,80,${pulseA*0.18})`;
+  ctx.lineWidth=24;ctx.stroke();
+  // Mid glow
+  ctx.beginPath();ctx.arc(cx,cy,br+4,0,Math.PI*2);
+  ctx.strokeStyle=`rgba(255,80,100,${pulseA*0.35})`;
+  ctx.lineWidth=10;ctx.stroke();
+  // Crisp red line
   ctx.beginPath();ctx.arc(cx,cy,br,0,Math.PI*2);
-  ctx.strokeStyle="rgba(200,40,50,0.7)";ctx.lineWidth=3;ctx.stroke();
-  ctx.beginPath();ctx.arc(cx,cy,br+5,0,Math.PI*2);
-  ctx.strokeStyle="rgba(200,40,50,0.2)";ctx.lineWidth=10;ctx.stroke();
+  ctx.strokeStyle=`rgba(255,90,110,${pulseA})`;
+  ctx.lineWidth=3;ctx.stroke();
+  // Bright inner edge
+  ctx.beginPath();ctx.arc(cx,cy,br-1,0,Math.PI*2);
+  ctx.strokeStyle=`rgba(255,200,210,${pulseA*0.4})`;
+  ctx.lineWidth=1;ctx.stroke();
 
   // Snakes — interpolate head+body, snap tail to avoid glitch
   for(const s of next.s){
