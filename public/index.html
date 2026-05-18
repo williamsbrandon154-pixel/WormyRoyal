@@ -948,7 +948,7 @@ function getFoodSprite(ci){
   foodSprites[ci]=c;return c;
 }
 
-// ===== SNAKE RENDERING (single continuous stroke) =====
+// ===== SNAKE RENDERING (head always on top) =====
 function drawSnake(s,pts,isMe){
   if(pts.length<2)return;
   const baseR=Math.max(8,s.r*ZOOM);
@@ -959,6 +959,9 @@ function drawSnake(s,pts,isMe){
   const pat=s.pat||"solid";
   const litCol=`rgb(${Math.min(255,cr*1.3)|0},${Math.min(255,cg*1.3)|0},${Math.min(255,cb*1.3)|0})`;
 
+  // Split: head portion (first 6 pts) drawn last = always on top
+  const headLen=Math.min(6,len-1);
+
   function tracePath(){
     ctx.beginPath();
     ctx.moveTo(pts[0][0],pts[0][1]);
@@ -968,8 +971,28 @@ function drawSnake(s,pts,isMe){
       ctx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
     }
   }
+  function traceBody(){
+    if(headLen>=len-1){tracePath();return}
+    ctx.beginPath();
+    ctx.moveTo(pts[headLen][0],pts[headLen][1]);
+    for(let i=headLen;i<len-1;i++){
+      const mx=(pts[i][0]+pts[i+1][0])/2;
+      const my=(pts[i][1]+pts[i+1][1])/2;
+      ctx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
+    }
+  }
+  function traceHead(){
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0],pts[0][1]);
+    for(let i=0;i<headLen;i++){
+      const mx=(pts[i][0]+pts[i+1][0])/2;
+      const my=(pts[i][1]+pts[i+1][1])/2;
+      ctx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
+    }
+  }
 
   ctx.lineCap="round";ctx.lineJoin="round";
+  const outlineCol=`rgb(${cr*.35|0},${cg*.35|0},${cb*.35|0})`;
 
   // BOOST GLOW
   if(isBoosting){
@@ -986,33 +1009,29 @@ function drawSnake(s,pts,isMe){
     ctx.lineWidth=baseR*2+12;ctx.strokeStyle=`rgba(255,215,0,${flk})`;ctx.stroke();
   }
 
-  // OUTLINE (dark tint of chosen color)
-  tracePath();
+  // === BODY (drawn first, behind head) ===
+  // Body outline
+  traceBody();
   ctx.lineWidth=baseR*2+5;
-  ctx.strokeStyle=`rgb(${cr*.35|0},${cg*.35|0},${cb*.35|0})`;
+  ctx.strokeStyle=outlineCol;
   ctx.stroke();
-
-  // BODY (one continuous stroke — pattern applied to full path)
-  tracePath();
+  // Body fill (with pattern support)
+  traceBody();
   ctx.lineWidth=baseR*2;
   if(pat==="gradient"){
-    const grd=ctx.createLinearGradient(pts[0][0],pts[0][1],pts[len-1][0],pts[len-1][1]);
+    const bStart=headLen,bEnd=len-1;
+    const grd=ctx.createLinearGradient(pts[bStart][0],pts[bStart][1],pts[bEnd][0],pts[bEnd][1]);
     grd.addColorStop(0,col);grd.addColorStop(0.5,litCol);grd.addColorStop(1,col);
     ctx.strokeStyle=grd;
-  } else {
-    ctx.strokeStyle=col;
-  }
+  } else { ctx.strokeStyle=col; }
   ctx.stroke();
-
-  // STRIPE OVERLAY (for striped pattern — stable index-based bands)
+  // Body stripes
   if(pat==="striped"){
-    const bandSize=3; // points per band
-    let i=0;
+    const bandSize=3;
+    let i=headLen;
     while(i<len-1){
-      // Skip main-color band
       i+=bandSize;
       if(i>=len-1)break;
-      // Draw lighter band
       const end=Math.min(i+bandSize,len-1);
       if(end>i){
         ctx.beginPath();
@@ -1021,27 +1040,23 @@ function drawSnake(s,pts,isMe){
           const mx=(pts[j][0]+pts[j+1][0])/2,my=(pts[j][1]+pts[j+1][1])/2;
           ctx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
         }
-        ctx.lineWidth=baseR*2;
-        ctx.lineCap="round";ctx.lineJoin="round";
-        ctx.strokeStyle=litCol;
-        ctx.stroke();
+        ctx.lineWidth=baseR*2;ctx.lineCap="round";ctx.lineJoin="round";
+        ctx.strokeStyle=litCol;ctx.stroke();
       }
       i=end;
     }
   }
-
-  // HIGHLIGHT (top shine)
-  tracePath();
+  // Body highlight
+  traceBody();
   ctx.lineWidth=baseR*0.7;
   ctx.strokeStyle=`rgba(${Math.min(255,cr+60)},${Math.min(255,cg+60)},${Math.min(255,cb+60)},0.2)`;
   ctx.stroke();
-
-  // SEGMENT RINGS
+  // Body segment rings
   const segSpacing=baseR*1.4;
   let distAcc=0;
   ctx.lineWidth=1.5;
   ctx.strokeStyle=`rgba(${Math.min(255,cr+40)},${Math.min(255,cg+40)},${Math.min(255,cb+40)},0.25)`;
-  for(let i=1;i<len;i++){
+  for(let i=headLen+1;i<len;i++){
     const dx=pts[i][0]-pts[i-1][0],dy=pts[i][1]-pts[i-1][1];
     const d=Math.sqrt(dx*dx+dy*dy);
     distAcc+=d;
@@ -1055,6 +1070,48 @@ function drawSnake(s,pts,isMe){
       ctx.stroke();
     }
   }
+
+  // === HEAD (drawn last, always on top) ===
+  // Head outline
+  traceHead();
+  ctx.lineWidth=baseR*2+5;
+  ctx.strokeStyle=outlineCol;
+  ctx.stroke();
+  // Head fill (with pattern support)
+  traceHead();
+  ctx.lineWidth=baseR*2;
+  if(pat==="gradient"){
+    const grd2=ctx.createLinearGradient(pts[0][0],pts[0][1],pts[headLen][0],pts[headLen][1]);
+    grd2.addColorStop(0,litCol);grd2.addColorStop(1,col);
+    ctx.strokeStyle=grd2;
+  } else { ctx.strokeStyle=col; }
+  ctx.stroke();
+  // Head stripes
+  if(pat==="striped"){
+    const bandSize=3;
+    let i=0;
+    while(i<headLen){
+      i+=bandSize;
+      if(i>=headLen)break;
+      const end=Math.min(i+bandSize,headLen);
+      if(end>i){
+        ctx.beginPath();
+        ctx.moveTo(pts[i][0],pts[i][1]);
+        for(let j=i;j<end;j++){
+          const mx=(pts[j][0]+pts[j+1][0])/2,my=(pts[j][1]+pts[j+1][1])/2;
+          ctx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
+        }
+        ctx.lineWidth=baseR*2;ctx.lineCap="round";ctx.lineJoin="round";
+        ctx.strokeStyle=litCol;ctx.stroke();
+      }
+      i=end;
+    }
+  }
+  // Head highlight
+  traceHead();
+  ctx.lineWidth=baseR*0.7;
+  ctx.strokeStyle=`rgba(${Math.min(255,cr+60)},${Math.min(255,cg+60)},${Math.min(255,cb+60)},0.2)`;
+  ctx.stroke();
 
   // Eyes
   const[hx,hy]=pts[0];
