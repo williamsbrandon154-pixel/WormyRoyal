@@ -457,29 +457,6 @@ class Room {
 
       // ===== TRIM body to sct points =====
       if (p.points.length > p.sct) p.points.length = p.sct;
-
-      // ===== COIL-IN FORCE — body actively tightens curves =====
-      // Slither.io's signature: the body progressively coils INTO ITSELF
-      // when circling. Pure queue-based body just traces head's path, but
-      // slither has an additional force that pulls each body segment
-      // toward the midpoint of its neighbors. Over time, curves tighten,
-      // coils get denser. Body literally "coils into itself".
-      // We DON'T apply this to the head (index 0) or the first few segments
-      // (they're determined by head's current direction).
-      const COIL_STRENGTH = 0.04;
-      for (let i = 3; i < p.points.length - 1; i++) {
-        const a = p.points[i - 1];
-        const b = p.points[i];
-        const c = p.points[i + 1];
-        // Midpoint of neighbors — this is the chord, inside any curve
-        const mx = (a.x + c.x) * 0.5;
-        const my = (a.y + c.y) * 0.5;
-        // Pull segment toward chord midpoint by COIL_STRENGTH
-        p.points[i] = {
-          x: b.x + (mx - b.x) * COIL_STRENGTH,
-          y: b.y + (my - b.y) * COIL_STRENGTH,
-        };
-      }
     }
 
     /* 3. Eating + Magnet + Power-up pickup */
