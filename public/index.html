@@ -1367,20 +1367,8 @@ function render(){
     }
     snakeSmoothedPts.set(s.id,smooth);
 
-    // === DYING TAIL crossfade (slither's "dying" tail mark) ===
-    if(s.dy&&s.dy.length>0){
-      for(let i=0;i<s.dy.length;i+=3){
-        const dx=s.dy[i],dy=s.dy[i+1],age=s.dy[i+2];
-        const alpha=Math.max(0,1-age/400);
-        const[sx,sy]=w2s(dx,dy);
-        ctx.beginPath();
-        ctx.arc(sx,sy,Math.max(8,s.r*ZOOM)*0.9,0,Math.PI*2);
-        ctx.fillStyle=s.c;
-        ctx.globalAlpha=alpha*0.6;
-        ctx.fill();
-        ctx.globalAlpha=1;
-      }
-    }
+    // Dying tail crossfade removed — was producing visible "blob glow"
+    // artifacts behind the snake. The natural body trim looks cleaner.
 
     if(smooth.length>1)drawSnake(s,smooth,s.id===myId);
   }

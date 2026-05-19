@@ -174,8 +174,9 @@ class Room {
     p.heading = Math.atan2(-hy, -hx);
     p.targetAngle = p.heading;
     p.sct = START_SCT;
-    p.fam = 0;                  // slither's fullness accumulator (0..1)
+    p.fam = 0;
     p._dyingPts = [];
+    p._stepAcc = 0;
     p.boost = false;
     p.alive = true;
     p._curSpeed = BASE_SPEED;
@@ -441,76 +442,73 @@ class Room {
       p._curSpeed += (targetSpeed - p._curSpeed) * 0.12;
       const speed = p._curSpeed;
 
-      // ===== HEAD + BODY: SLITHER.IO EXACT chain-relaxation =====
-      // From slither.io's actual source code (slither.io/s/game.js):
-      //
-      //   k = pts.length - 3
-      //   lmpo = pts[k]
-      //   for m = k-1 down to 0:
-      //     n++; mv = n<=4 ? cst*n/4 : cst   (cst = 0.43)
-      //     pts[m].x += (lmpo.x - pts[m].x) * mv
-      //     pts[m].y += (lmpo.y - pts[m].y) * mv
-      //     lmpo = pts[m]
-      //
-      // Slither has head at END of pts. Each segment lerps toward the
-      // one in front of it (higher index). First 4 processed get ramp;
-      // rest get full cst.
-      //
-      // Our array has head at index 0. So we iterate from index 3 upward,
-      // each segment lerping toward points[m-1] (the one closer to head,
-      // which was already updated in this loop iteration).
+      // ===== HEAD + BODY: SLITHER.IO actual architecture =====
+      // From reading slither.io/s/game.js source:
+      //   1. Head moves smoothly EVERY tick (o.xx += cos(ang)*csp)
+      //   2. New pts entry pushed ONLY when head has traveled msl distance
+      //   3. Chain relaxation runs ONCE PER PUSH (not every tick)
+      // This keeps body at proper msl/wsep spacing AND smooths the chain
+      // without compressing it to a tiny ball every tick.
       const head = p.points[0];
       const nx = head.x + Math.cos(p.heading) * speed;
       const ny = head.y + Math.sin(p.heading) * speed;
+      // Head moves smoothly (just update the first point)
+      p.points[0] = { x: nx, y: ny };
 
-      // Push new head to front (slither pushes to end, we unshift to front)
-      p.points.unshift({ x: nx, y: ny });
+      // Track distance traveled since last pts push
+      if (!p._stepAcc) p._stepAcc = 0;
+      p._stepAcc += speed;
+      const wsep = this.getWsep(p);
 
-      // ===== GROW/SHRINK via fam accumulator (slither.io exact) =====
-      // When fam >= 1: sct++, fam -= 1 (a full segment of growth has accumulated)
-      // When fam < 0: sct--, fam += 1 (lost a full segment of mass)
-      // Move 1 step per tick toward the target — gradual changes.
-      if (p.fam >= 1) {
-        p.sct++;
-        p.fam -= 1;
-      } else if (p.fam < 0 && p.sct > 2) {
-        p.sct--;
-        p.fam += 1;
-      }
+      // When head has moved a full msl/wsep, push a new pts entry.
+      // This is the ONLY time we expand the body or run chain relaxation.
+      if (p._stepAcc >= wsep) {
+        p._stepAcc -= wsep;
 
-      // Trim body to current sct — mark popped tail as DYING for crossfade
-      while (p.points.length > p.sct) {
-        const dyingTail = p.points.pop();
-        // Store for fade-out rendering (slither marks tail "dying")
-        if (dyingTail) {
-          p._dyingPts.push({
-            x: dyingTail.x,
-            y: dyingTail.y,
-            fadeStart: now,
-          });
+        // Unshift the current head position as a new body point.
+        // Now p.points[0] = head (will keep moving), p.points[1] = frozen.
+        p.points.unshift({ x: nx, y: ny });
+
+        // ===== GROW/SHRINK via fam (only when pushing) =====
+        if (p.fam >= 1) {
+          p.sct++;
+          p.fam -= 1;
+        } else if (p.fam < 0 && p.sct > 2) {
+          p.sct--;
+          p.fam += 1;
+        }
+
+        // Trim to sct+1 (because index 0 is head; body has sct points)
+        while (p.points.length > p.sct + 1) {
+          const dyingTail = p.points.pop();
+          if (dyingTail) {
+            p._dyingPts.push({
+              x: dyingTail.x, y: dyingTail.y, fadeStart: now,
+            });
+          }
+        }
+
+        // ===== CHAIN RELAXATION (slither's exact algorithm, ONCE per push) =====
+        // From slither source: runs in the pts.push handler, not every frame.
+        // Each segment lerps toward predecessor with cst ramp.
+        const CST = 0.43;
+        let n = 0;
+        for (let m = 3; m < p.points.length; m++) {
+          n++;
+          const mv = n <= 4 ? CST * n / 4 : CST;
+          const ahead = p.points[m - 1];
+          const curr = p.points[m];
+          p.points[m] = {
+            x: curr.x + (ahead.x - curr.x) * mv,
+            y: curr.y + (ahead.y - curr.y) * mv,
+          };
         }
       }
-      // Clean up dying points that have fully faded (after 400ms)
+
+      // Cleanup faded dying points (every tick, not just on push)
       const FADE_MS = 400;
       while (p._dyingPts.length > 0 && now - p._dyingPts[0].fadeStart > FADE_MS) {
         p._dyingPts.shift();
-      }
-
-      // ===== CHAIN RELAXATION (slither's exact algorithm) =====
-      // Skip head (index 0), first body (1), second body (2).
-      // From index 3 onward: each segment lerps toward the one in front.
-      // The just-updated position propagates down the chain.
-      const CST = 0.43;
-      let n = 0;
-      for (let m = 3; m < p.points.length; m++) {
-        n++;
-        const mv = n <= 4 ? CST * n / 4 : CST;
-        const ahead = p.points[m - 1];  // segment closer to head (just updated)
-        const curr = p.points[m];
-        p.points[m] = {
-          x: curr.x + (ahead.x - curr.x) * mv,
-          y: curr.y + (ahead.y - curr.y) * mv,
-        };
       }
     }
 
@@ -686,23 +684,12 @@ class Room {
         const lastIdx = total - 1;
         pts.push(Math.round(p.points[lastIdx].x), Math.round(p.points[lastIdx].y));
       }
-      // Dying tail points for crossfade (slither's "dying" tail effect).
-      // Send each as [x, y, age_ms] so client can render with alpha.
-      const dying = [];
-      const tnow = Date.now();
-      for (const dp of p._dyingPts) {
-        const age = tnow - dp.fadeStart;
-        if (age < 400) {
-          dying.push(Math.round(dp.x), Math.round(dp.y), age);
-        }
-      }
       snakes.push({
         id: p.id, n: p.name, c: p.color, pat: p.pattern,
         r: Math.round(this.snakeRadius(p)),
         m: p.sct, p: pts,
         b: p.boost && p.sct > BOOST_MIN_SCT ? 1 : 0,
         pu: p.powerups.map(x => x.type),
-        dy: dying.length > 0 ? dying : undefined,
       });
     }
 
