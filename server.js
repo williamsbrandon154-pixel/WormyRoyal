@@ -175,12 +175,12 @@ class Room {
   hasPowerup(p, type) { return p.powerups.some(pu => pu.type === type); }
 
   snakeRadius(p) {
-    // Slither.io style with more aggressive thickness so snakes feel
-    // substantial at mid-game (matching slither.io's visual proportions).
-    // Max radius ~20 at infinite mass.
-    //   mass 14→7.5, mass 100→13, mass 200→15.3, mass 500→17.7, mass 1000→18.7
-    let r = SNAKE_BASE_R + 14 * (1 - 1 / (1 + p.mass / 100));
-    if (this.hasPowerup(p, "jumbo")) r *= 1.8;
+    // Matched to slither.io's actual body proportions (from gameplay
+    // footage analysis). Slither snakes are visibly THICK even at low
+    // scores — small snake body ~30px wide, max ~70-80px.
+    //   mass 14→14, mass 50→18, mass 100→22, mass 270→28, mass 1000→34, max→38
+    let r = SNAKE_BASE_R + 7 + 26 * (1 - 1 / (1 + p.mass / 200));
+    if (this.hasPowerup(p, "jumbo")) r *= 1.6;
     return r;
   }
   targetLen(p) {

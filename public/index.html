@@ -1185,12 +1185,14 @@ function render(){
     if(mp){tx=mp.p[0]+(me.p[0]-mp.p[0])*a;ty=mp.p[1]+(me.p[1]-mp.p[1])*a}
     camX+=(tx-camX)*0.15;camY+=(ty-camY)*0.15;
 
-    // Zoom out based on snake radius. me.r ranges ~6 (start) to ~16 (max).
-    // Map to sc-style factor: sc=1 at r=6, sc=3 at r=16 (more conservative
-    // than slither's sc=6 for our smaller map). Then targetZoom = base/sc.
-    const sc=1+(me.r-6)*0.2;
-    const targetZoom=ZOOM_BASE/Math.max(1,sc);
-    // Very slow lerp — gradual camera pullback as you grow (slither feel)
+    // Camera zoom out based on snake size — but more conservative than
+    // before. Slither.io keeps small snakes feeling 'close' and only
+    // pulls back significantly at large size. me.r now ranges ~13 (start)
+    // to ~40 (max) with the new thicker bodies.
+    // Use a milder scaling factor so small/medium snakes stay zoomed in.
+    const growth=Math.max(0,(me.r-13)/27); // 0 at start, 1 at max size
+    const targetZoom=ZOOM_BASE*(1-growth*0.5); // pull back up to 50% at max
+    // Very slow lerp — gradual cinematic camera pullback
     ZOOM+=(targetZoom-ZOOM)*0.03;
   }
 
