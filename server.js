@@ -170,23 +170,12 @@ class Room {
     p.alive = true;
     p._curSpeed = BASE_SPEED;
     p._stormTicks = 0;
-    p._headPath = []; // dense head-position trail, used to sample body segments
 
     p.powerups = [];        // array of {type, until}
     p.points = [];
-    p._headPath = [];
-    // Seed path with starting positions extending backward from head.
-    // Dense initial path so the body can sample wsep-arc-length segments.
+    // Initial body: START_SCT points laid backward from head at wsep
+    // (slither's chain relaxation will smooth them as the snake moves)
     const wsep = this.getWsep(p);
-    const pathSeed = Math.max(50, START_SCT * 4);
-    for (let i = 0; i < pathSeed; i++) {
-      // ~speed worth of distance per step (matches normal tick spacing)
-      p._headPath.push({
-        x: hx - Math.cos(p.heading) * i * BASE_SPEED,
-        y: hy - Math.sin(p.heading) * i * BASE_SPEED,
-      });
-    }
-    // Body segments at wsep along the seed path
     for (let i = 0; i < START_SCT; i++) {
       p.points.push({
         x: hx - Math.cos(p.heading) * i * wsep,
@@ -441,64 +430,53 @@ class Room {
       p._curSpeed += (targetSpeed - p._curSpeed) * 0.12;
       const speed = p._curSpeed;
 
-      // ===== HEAD + BODY: slither.io EXACT algorithm =====
-      // Slither saves head position every tick (dense path), then walks
-      // that path to place body segments at wsep ARC-LENGTH intervals.
-      // This produces smooth bodies that perfectly follow the head's curve.
-      // (Confirmed by analysis of knagaitsev/slither.io-clone source.)
-      // NO inward drift force — slither has none. The 'coil tightens'
-      // visual is purely from old straight trail being consumed.
-      const wsep = this.getWsep(p);
+      // ===== HEAD + BODY: SLITHER.IO EXACT chain-relaxation =====
+      // From slither.io's actual source code (slither.io/s/game.js):
+      //
+      //   k = pts.length - 3
+      //   lmpo = pts[k]
+      //   for m = k-1 down to 0:
+      //     n++; mv = n<=4 ? cst*n/4 : cst   (cst = 0.43)
+      //     pts[m].x += (lmpo.x - pts[m].x) * mv
+      //     pts[m].y += (lmpo.y - pts[m].y) * mv
+      //     lmpo = pts[m]
+      //
+      // Slither has head at END of pts. Each segment lerps toward the
+      // one in front of it (higher index). First 4 processed get ramp;
+      // rest get full cst.
+      //
+      // Our array has head at index 0. So we iterate from index 3 upward,
+      // each segment lerping toward points[m-1] (the one closer to head,
+      // which was already updated in this loop iteration).
       const head = p.points[0];
       const nx = head.x + Math.cos(p.heading) * speed;
       const ny = head.y + Math.sin(p.heading) * speed;
 
-      // Save current head position to the path (dense — every physics tick)
-      if (!p._headPath) p._headPath = [];
-      p._headPath.unshift({ x: nx, y: ny });
-      // Cap path length. At 125Hz speed per tick is ~1.2, so we need many
-      // more entries to cover full body arc. Worst case sc=6:
-      // wsep=36, speed≈1.75, entries ≈ sct*20. Pad to 24.
-      const maxPath = Math.max(400, p.sct * 24);
-      if (p._headPath.length > maxPath) p._headPath.length = maxPath;
+      // Push new head to front (slither pushes to end, we unshift to front)
+      p.points.unshift({ x: nx, y: ny });
 
       // ===== GROW/SHRINK: bring sct closer to mass, 1/tick =====
       if (p.mass >= p.sct + 1) p.sct++;
       else if (p.mass < p.sct && p.sct > 2) p.sct--;
 
-      // ===== SAMPLE body segments from head path at wsep arc length =====
-      // Slither.io exact: walk the dense head path, accumulating arc length,
-      // place a body segment each time we cover wsep more distance.
-      // We use a "walker" position (continuous, not bound to path indices)
-      // so we can place segments at exact wsep without corrupting the path.
-      p.points = [{ x: nx, y: ny }]; // head
-      let walkerX = nx, walkerY = ny;
-      let pathIdx = 0;
+      // Trim body to current sct
+      while (p.points.length > p.sct) p.points.pop();
 
-      while (p.points.length < p.sct && pathIdx + 1 < p._headPath.length) {
-        // Advance walker by wsep along the path
-        let needToWalk = wsep;
-        while (needToWalk > 0 && pathIdx + 1 < p._headPath.length) {
-          const b = p._headPath[pathIdx + 1];
-          const dx = b.x - walkerX;
-          const dy = b.y - walkerY;
-          const segDist = Math.hypot(dx, dy);
-          if (segDist >= needToWalk) {
-            // Walker advances within current segment
-            const t = needToWalk / segDist;
-            walkerX += dx * t;
-            walkerY += dy * t;
-            needToWalk = 0;
-          } else {
-            // Walker reaches next path entry, advance to it
-            walkerX = b.x;
-            walkerY = b.y;
-            needToWalk -= segDist;
-            pathIdx++;
-          }
-        }
-        // Place body segment at walker's current position
-        p.points.push({ x: walkerX, y: walkerY });
+      // ===== CHAIN RELAXATION (slither's exact algorithm) =====
+      // Skip head (index 0), first body (1), second body (2).
+      // From index 3 onward: each segment lerps toward the one in front.
+      // The just-updated position propagates down the chain.
+      const CST = 0.43;
+      let n = 0;
+      for (let m = 3; m < p.points.length; m++) {
+        n++;
+        const mv = n <= 4 ? CST * n / 4 : CST;
+        const ahead = p.points[m - 1];  // segment closer to head (just updated)
+        const curr = p.points[m];
+        p.points[m] = {
+          x: curr.x + (ahead.x - curr.x) * mv,
+          y: curr.y + (ahead.y - curr.y) * mv,
+        };
       }
     }
 
