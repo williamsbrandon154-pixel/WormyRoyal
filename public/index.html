@@ -470,19 +470,19 @@ addEventListener("keydown",e=>{
 // Snapshot buffer for smooth interpolation
 const snapBuf=[];
 const SNAP_MAX=12;
-const RENDER_DELAY=45; // ms behind latest snapshot (was 80 — overly conservative)
+// Latest snapshot, no buffer — ring buffer handles smoothing
+const RENDER_DELAY=0;
 
-// === SLITHER.IO exact render smoothing — cosine ring buffer per body point ===
-// From slither.io/s/game.js: each body point has fxs[hfc]/fys[hfc] ring buffers.
-// When the point's position changes by (dx, dy), the delta is written across
-// the ring with cosine kernel hfas[]:
-//   for j in 0..hfc:   fxs[(fpos+j)%hfc] -= dx * hfas[j]
-// Each render frame, read and clear the front of the ring, advance fpos:
-//   fx = fxs[fpos]; fxs[fpos] = 0; fpos = (fpos+1) % hfc; ftg--
-// Rendered position = point.xx + fx
-// Result: when a point moves, the rendered position transitions smoothly
-// over hfc frames via a cosine curve. Slither's signature butter motion.
-const HFC = 53;  // slither's eez/hfc value
+// === SLITHER.IO cosine ring buffer — kernel tuned for our 30 Hz network ===
+// Slither.io's actual source uses hfc=53 at 60 Hz physics+network for a ~430 ms
+// effective render lag. At our 30 Hz broadcasts that kernel becomes molasses.
+// HFC=8 (~133 ms kernel, ~67 ms effective lag) preserves slither's cosine
+// curve while feeling responsive to mouse input.
+//   Per body point: fxs[HFC]/fys[HFC] ring buffer.
+//   On position change (dx,dy): for j in 0..HFC, fxs[(fpos+j)%HFC] -= dx * hfas[j]
+//   Per render frame: fx = fxs[fpos]; fxs[fpos]=0; fpos=(fpos+1)%HFC; ftg--
+//   Rendered position = point.xx + fx
+const HFC = 8;
 const hfas = new Float32Array(HFC);
 for (let i = 0; i < HFC; i++) {
   hfas[i] = 0.5 * (1 - Math.cos(Math.PI * (HFC - 1 - i) / (HFC - 1)));
