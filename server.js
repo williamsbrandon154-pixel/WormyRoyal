@@ -170,12 +170,23 @@ class Room {
     p.alive = true;
     p._curSpeed = BASE_SPEED;
     p._stormTicks = 0;
-    p._stepAcc = 0;
+    p._headPath = []; // dense head-position trail, used to sample body segments
 
     p.powerups = [];        // array of {type, until}
     p.points = [];
-    // Initial body: START_SCT segments laid out behind the head at wsep spacing
+    p._headPath = [];
+    // Seed path with starting positions extending backward from head.
+    // Dense initial path so the body can sample wsep-arc-length segments.
     const wsep = this.getWsep(p);
+    const pathSeed = Math.max(50, START_SCT * 4);
+    for (let i = 0; i < pathSeed; i++) {
+      // ~speed worth of distance per step (matches normal tick spacing)
+      p._headPath.push({
+        x: hx - Math.cos(p.heading) * i * BASE_SPEED,
+        y: hy - Math.sin(p.heading) * i * BASE_SPEED,
+      });
+    }
+    // Body segments at wsep along the seed path
     for (let i = 0; i < START_SCT; i++) {
       p.points.push({
         x: hx - Math.cos(p.heading) * i * wsep,
@@ -430,47 +441,58 @@ class Room {
       p._curSpeed += (targetSpeed - p._curSpeed) * 0.4;
       const speed = p._curSpeed;
 
-      // ===== HEAD + BODY: queue-based with active inward spiral =====
-      // Body is the head's PAST positions sampled at wsep intervals.
-      // PLUS: when the head is turning, we apply an extra inward drift
-      // perpendicular to heading (toward the inside of the turn).
-      // This makes continuous circling produce a visible inward
-      // spiral — the slither.io "coil tightens into itself" feel.
+      // ===== HEAD + BODY: slither.io EXACT algorithm =====
+      // Slither saves head position every tick (dense path), then walks
+      // that path to place body segments at wsep ARC-LENGTH intervals.
+      // This produces smooth bodies that perfectly follow the head's curve.
+      // (Confirmed by analysis of knagaitsev/slither.io-clone source.)
+      // NO inward drift force — slither has none. The 'coil tightens'
+      // visual is purely from old straight trail being consumed.
       const wsep = this.getWsep(p);
       const head = p.points[0];
-      let nx = head.x + Math.cos(p.heading) * speed;
-      let ny = head.y + Math.sin(p.heading) * speed;
+      const nx = head.x + Math.cos(p.heading) * speed;
+      const ny = head.y + Math.sin(p.heading) * speed;
 
-      // Inward drift: when heading rotated this tick, push head toward
-      // the center of the turn. Amount proportional to how much we turned.
-      if (Math.abs(turnApplied) > 0.001) {
-        const turnSign = turnApplied > 0 ? 1 : -1;
-        const inwardDir = p.heading + turnSign * Math.PI / 2;
-        // Drift = (turn fraction of max) * speed * coil strength
-        const COIL_INWARD = 0.65;
-        const driftAmount = Math.abs(turnApplied) * speed * COIL_INWARD;
-        nx += Math.cos(inwardDir) * driftAmount;
-        ny += Math.sin(inwardDir) * driftAmount;
-      }
-
-      if (!p._stepAcc) p._stepAcc = 0;
-      p._stepAcc += speed;
-      if (p._stepAcc >= wsep) {
-        // Cross wsep boundary → save old head position as new body point
-        p._stepAcc -= wsep;
-        p.points.unshift({ x: nx, y: ny });
-      } else {
-        // Sub-step: just update head position smoothly
-        p.points[0] = { x: nx, y: ny };
-      }
+      // Save current head position to the path (dense — every tick)
+      if (!p._headPath) p._headPath = [];
+      p._headPath.unshift({ x: nx, y: ny });
+      // Cap path length to what's needed for the body + safety margin
+      const maxPath = Math.max(50, p.sct * 4);
+      if (p._headPath.length > maxPath) p._headPath.length = maxPath;
 
       // ===== GROW/SHRINK: bring sct closer to mass, 1/tick =====
-      // sct is the target body-part count; mass tracks fractional growth.
       if (p.mass >= p.sct + 1) p.sct++;
       else if (p.mass < p.sct && p.sct > 2) p.sct--;
 
-      // ===== TRIM body to sct points =====
-      if (p.points.length > p.sct) p.points.length = p.sct;
+      // ===== SAMPLE body segments from head path at wsep arc length =====
+      // Slither.io exact: walk the dense head path, accumulating distance,
+      // place a body segment each time cumulative distance crosses wsep.
+      // This makes the body smoothly trace the head's actual curved path.
+      p.points = [{ x: nx, y: ny }]; // head
+      let pathIdx = 0;
+      let acc = 0;
+      while (p.points.length < p.sct && pathIdx + 1 < p._headPath.length) {
+        const a = p._headPath[pathIdx];
+        const b = p._headPath[pathIdx + 1];
+        const segDist = Math.hypot(b.x - a.x, b.y - a.y);
+        if (acc + segDist >= wsep) {
+          // Place segment at exact wsep along this path segment
+          const t = (wsep - acc) / segDist;
+          p.points.push({
+            x: a.x + (b.x - a.x) * t,
+            y: a.y + (b.y - a.y) * t,
+          });
+          // Continue from this point — update path with placed position
+          // so subsequent segments measure from here
+          p._headPath[pathIdx] = p.points[p.points.length - 1];
+          acc = 0;
+          // Don't advance pathIdx — there might be more wsep boundaries
+          // within this segment if segDist was large (rare but possible).
+        } else {
+          acc += segDist;
+          pathIdx++;
+        }
+      }
     }
 
     /* 3. Eating + Magnet + Power-up pickup */
