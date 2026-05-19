@@ -178,8 +178,19 @@ label{display:block;font-size:10px;color:#666;text-transform:uppercase;letter-sp
 <div id="srv">server 0001</div>
 </div>
 <div id="warn"></div>
-<!-- TEST MODE exit button — only visible in solo test rooms -->
+<!-- TEST MODE controls — exit + size adjustment -->
 <button id="testExitBtn" style="display:none;position:fixed;top:10px;left:10px;z-index:30;align-items:center;gap:6px;background:rgba(20,30,50,0.85);border:1px solid #42a5f5;color:#42a5f5;padding:8px 14px;border-radius:14px;font:700 12px Nunito,sans-serif;cursor:pointer;backdrop-filter:blur(4px)">← EXIT TEST MODE</button>
+<div id="testSizePanel" style="display:none;position:fixed;top:50px;left:10px;z-index:30;background:rgba(20,30,50,0.85);border:1px solid #42a5f5;border-radius:14px;padding:10px 12px;font:600 11px Nunito,sans-serif;color:#fff;backdrop-filter:blur(4px);user-select:none">
+  <div style="font-size:10px;color:#42a5f5;text-align:center;margin-bottom:8px;letter-spacing:1px">SIZE</div>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+    <button class="szBtn" data-d="100" style="background:#42a5f5;color:#001;border:0;width:42px;height:24px;border-radius:8px;cursor:pointer;font:700 11px Nunito,sans-serif">▲▲</button>
+    <button class="szBtn" data-d="10" style="background:#42a5f5;color:#001;border:0;width:42px;height:24px;border-radius:8px;cursor:pointer;font:700 14px Nunito,sans-serif">▲</button>
+    <div id="testSizeLabel" style="font-size:16px;font-weight:800;color:#fff;min-width:50px;text-align:center;padding:4px 0">—</div>
+    <button class="szBtn" data-d="-10" style="background:#42a5f5;color:#001;border:0;width:42px;height:24px;border-radius:8px;cursor:pointer;font:700 14px Nunito,sans-serif">▼</button>
+    <button class="szBtn" data-d="-100" style="background:#42a5f5;color:#001;border:0;width:42px;height:24px;border-radius:8px;cursor:pointer;font:700 11px Nunito,sans-serif">▼▼</button>
+  </div>
+  <div style="font-size:9px;color:#7a8aa0;text-align:center;margin-top:6px;line-height:1.3">↑↓ keys<br>or click</div>
+</div>
 <div id="spec">ELIMINATED — spectating <button id="menuBtn" style="pointer-events:auto;margin-left:10px;background:#333;color:#fff;border:0;padding:5px 14px;border-radius:12px;font:600 11px Nunito,sans-serif;cursor:pointer">Back to Menu</button></div>
 <div id="boost">BOOST</div>
 <div id="winOverlay" style="display:none;position:fixed;inset:0;z-index:100;pointer-events:none">
@@ -428,6 +439,7 @@ function backToMenu(){
   if(ws){ws.close();ws=null;}
   myId=null;iAmHost=false;amAlive=false;isTestMode=false;
   $("testExitBtn").style.display="none";
+  $("testSizePanel").style.display="none";
   snapBuf.length=0;
   hideWinAnimation();
   $("hud").classList.remove("on");
@@ -440,6 +452,21 @@ function backToMenu(){
 $("leaveBtn").onclick=backToMenu;
 $("menuBtn").onclick=backToMenu;
 $("testExitBtn").onclick=backToMenu;
+
+// === TEST MODE: size adjustment ===
+function sendSizeDelta(d){
+  if(!isTestMode||!ws||ws.readyState!==1)return;
+  ws.send(JSON.stringify({t:"testSize",delta:d}));
+}
+document.querySelectorAll(".szBtn").forEach(btn=>{
+  btn.onclick=()=>sendSizeDelta(parseInt(btn.dataset.d,10));
+});
+// Arrow keys also adjust size in test mode
+addEventListener("keydown",e=>{
+  if(!isTestMode)return;
+  if(e.code==="ArrowUp"){sendSizeDelta(e.shiftKey?100:10);e.preventDefault()}
+  else if(e.code==="ArrowDown"){sendSizeDelta(e.shiftKey?-100:-10);e.preventDefault()}
+});
 // Snapshot buffer for smooth interpolation
 const snapBuf=[];
 const SNAP_MAX=12;
@@ -480,7 +507,7 @@ function connect(name,room,mode){
 }
 function handle(m){
   switch(m.t){
-    case"welcome":myId=m.id;iAmHost=m.isHost;isTestMode=!!m.isTestMode;$("mainMenuScr").classList.add("hide");$("privateScr").classList.add("hide");if(!isTestMode){$("lobbyScr").classList.remove("hide")}$("lobbyCode").textContent=m.room;history.replaceState(null,"","?room="+m.room);$("testExitBtn").style.display=isTestMode?"flex":"none";break;
+    case"welcome":myId=m.id;iAmHost=m.isHost;isTestMode=!!m.isTestMode;$("mainMenuScr").classList.add("hide");$("privateScr").classList.add("hide");if(!isTestMode){$("lobbyScr").classList.remove("hide")}$("lobbyCode").textContent=m.room;history.replaceState(null,"","?room="+m.room);$("testExitBtn").style.display=isTestMode?"flex":"none";$("testSizePanel").style.display=isTestMode?"block":"none";break;
     case"lobby":renderLobby(m);break;
     case"autostart":startAutoCountdown(m.seconds);break;
     case"roundstart":hideScreens();countdown(m.countdownMs);break;
@@ -496,6 +523,8 @@ function updateHUD(m){
   const me=m.s.find(x=>x.id===myId);
   if(me&&me.m>lastMass&&lastMass>0&&amAlive)playFoodSound();
   if(me)lastMass=me.m;
+  // Test mode: keep size label live
+  if(isTestMode&&me)$("testSizeLabel").textContent=me.m;
   // Only update DOM every 4th tick (~8fps for HUD text, reduces reflows)
   _hudTick++;
   if(_hudTick%4!==0)return;

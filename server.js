@@ -847,6 +847,13 @@ wss.on("connection", (ws, req) => {
         if (typeof msg.angle === "number" && isFinite(msg.angle)) me.targetAngle = msg.angle;
         me.boost = !!msg.boost;
         break;
+      case "testSize":
+        // Only allowed in test mode — adjust snake size for practice
+        if (room.isTestMode && me.alive && typeof msg.delta === "number" && isFinite(msg.delta)) {
+          const d = Math.max(-500, Math.min(500, Math.round(msg.delta)));
+          me.mass = Math.max(2, Math.min(5000, me.mass + d));
+        }
+        break;
       case "start":
         if (me.isHost) room.startCountdown();
         break;
