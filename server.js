@@ -82,6 +82,7 @@ class Room {
     this.powerups = [];
     this.powerupTimer = 0;
     this.isPublic = false;
+    this.isTestMode = false;  // solo practice mode
   }
 
   /* ---- player lifecycle ---- */
@@ -105,7 +106,7 @@ class Room {
       boost: false, sct: START_SCT, mass: START_SCT, _curSpeed: BASE_SPEED, _stormTicks: 0,
     };
     this.players.set(id, p);
-    this.send(p, { t: "welcome", id, room: this.code, isHost, settings: this.settings, isPublic: this.isPublic });
+    this.send(p, { t: "welcome", id, room: this.code, isHost, settings: this.settings, isPublic: this.isPublic, isTestMode: this.isTestMode });
     this.broadcastLobby();
 
     // Auto-start public rooms when 2+ players join (10 second countdown)
@@ -230,7 +231,8 @@ class Room {
   /* ---- round flow ---- */
   startCountdown() {
     if (this.state !== "lobby" && this.state !== "postgame") return;
-    if (this.players.size < 2) return;
+    // Test mode allows solo play; everything else needs 2+
+    if (!this.isTestMode && this.players.size < 2) return;
 
     // Public rooms: auto-configure settings based on player count
     if (this.isPublic) {
@@ -266,6 +268,8 @@ class Room {
   }
 
   checkWin() {
+    // Test mode never ends — solo player can roam freely.
+    if (this.isTestMode) return;
     const alive = [...this.players.values()].filter(p => p.alive);
     if (alive.length <= 1 && this.starterCount >= 1) {
       this.state = "postgame";
@@ -295,6 +299,14 @@ class Room {
     p.points = [];
     this.send(p, { t: "died", reason });
     if (this.state === "playing") this.checkWin();
+    // Test mode: auto-respawn after a short delay (no game over)
+    if (this.isTestMode && this.state === "playing") {
+      setTimeout(() => {
+        if (this.isTestMode && this.players.has(p.id) && this.state === "playing") {
+          this.spawnSnake(p);
+        }
+      }, 1500);
+    }
   }
 
   /* ---- the simulation tick ---- */
@@ -618,6 +630,7 @@ class Room {
       winner: this.winnerName,
       settings: this.settings,
       isPublic: this.isPublic,
+      isTestMode: this.isTestMode,
     });
   }
 
@@ -800,11 +813,31 @@ wss.on("connection", (ws, req) => {
       const mode = msg.mode || "private";
       if (mode === "quickplay") {
         room = findQuickPlayRoom();
+      } else if (mode === "test") {
+        // Create a fresh private test room — solo play, no waiting, never ends
+        const code = "TEST" + Math.random().toString(36).substring(2, 5).toUpperCase();
+        room = new Room(code);
+        room.isTestMode = true;
+        // Sensible defaults for solo roaming
+        room.settings.mapSize = 1800;
+        room.settings.snakeSpeed = 1.0;
+        room.settings.boostSpeed = 1.5;
+        room.settings.borderSpeed = 0.25;  // very slow border in test
+        room.settings.foodRate = 1.5;      // extra food for testing growth
+        room.settings.maxPlayers = 1;
+        rooms.set(code, room);
       } else {
         const roomCode = String(msg.room || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toUpperCase() || "MAIN";
         room = getRoom(roomCode);
       }
       me = room.addPlayer(ws, name, msg.color, msg.pattern);
+      // Test mode: immediately start (no countdown wait for 2nd player)
+      if (room && room.isTestMode && me) {
+        // Small delay so welcome message processes first
+        setTimeout(() => {
+          if (room.state === "lobby") room.startCountdown();
+        }, 100);
+      }
       return;
     }
     if (!room || !me) return;
