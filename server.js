@@ -369,20 +369,19 @@ class Room {
       p.powerups = p.powerups.filter(pu => now < pu.until);
 
       const d = angleDelta(p.heading, p.targetAngle);
-      // Slither.io scaling, but sc derived from MASS directly (not body
-      // point count). Our body uses sqrt(mass) length scaling so we'd
-      // never reach sc=6 if we used slither's body-count formula.
-      // Map mass → sc via sqrt so big snakes (mass 200+) hit the cap
-      // and turn at slither's heaviest rate.
-      //   sc = min(6, 1 + sqrt(mass) * 0.35)
+      // Slither.io scaling — sc derived from MASS via sqrt.
+      // Previous 0.35 multiplier capped sc at mass ~250, making
+      // everything 250+ turn at slither's MAX slow rate (impossible).
+      // Real slither caps at score ~411 (sc 4.86), and most players
+      // don't get there. New 0.20 ramp = gradual feel:
+      //   sc = min(6, 1 + sqrt(mass) * 0.20)
       // Results:
-      //   mass 14   → sc 2.31 → 296°/s (snappy starter)
-      //   mass 50   → sc 3.47 → 195°/s (responsive)
-      //   mass 100  → sc 4.50 → 126°/s (heavier)
-      //   mass 200  → sc 5.95 → 71°/s  (slow, big-snake feel)
-      //   mass 270  → sc 6.00 → 58°/s  (committed turns only)
-      //   mass 500+ → sc 6.00 → 58°/s  (capped — slither big-snake)
-      const sc = Math.min(6, 1 + Math.sqrt(p.mass) * 0.35);
+      //   mass 14   → sc 1.75 → 348°/s (snappy starter)
+      //   mass 100  → sc 3.00 → 230°/s (responsive)
+      //   mass 270  → sc 4.29 → 134°/s (heavy but still turning)
+      //   mass 500  → sc 5.47 → 84°/s  (slow, like slither big)
+      //   mass 750+ → sc 6.00 → 58°/s  (max slow, very rare)
+      const sc = Math.min(6, 1 + Math.sqrt(p.mass) * 0.20);
       const scang = 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
       const turnRate = 0.26 * scang;
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
