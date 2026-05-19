@@ -471,6 +471,14 @@ addEventListener("keydown",e=>{
 const snapBuf=[];
 const SNAP_MAX=12;
 const RENDER_DELAY=80; // ms behind latest snapshot
+
+// === Slither.io style render smoothing ===
+// Slither uses a cosine-window ring buffer (fxs/fys) to smooth motion
+// between physics ticks. We replicate via per-snake smoothed-position
+// buffers that lerp toward the interpolated server positions.
+// SMOOTH_FACTOR 0.35 ≈ slither's hfas cosine bell kernel average response.
+const snakeSmoothedPts=new Map(); // id → array of [sx,sy] smoothed positions
+const SMOOTH_FACTOR=0.35;
 let camX=0,camY=0;
 const isTouch=matchMedia("(pointer:coarse)").matches;
 const ZOOM_BASE=isTouch?0.40:1.5; // slightly higher mobile base since we now zoom out with growth
@@ -1328,7 +1336,6 @@ function render(){
     const pts=[];
     const nLen=s.p.length;
     const pLen=ps?ps.p.length:0;
-    // Prev's tail position (fallback for missing prev indices)
     const ptailX=pLen>=2?ps.p[pLen-2]:0;
     const ptailY=pLen>=2?ps.p[pLen-1]:0;
     for(let i=0;i<nLen;i+=2){
@@ -1338,14 +1345,48 @@ function render(){
           wx=ps.p[i]+(s.p[i]-ps.p[i])*a;
           wy=ps.p[i+1]+(s.p[i+1]-ps.p[i+1])*a;
         }else if(pLen>=2){
-          // Extra point — smoothly fade in from prev's tail
           wx=ptailX+(s.p[i]-ptailX)*a;
           wy=ptailY+(s.p[i+1]-ptailY)*a;
         }
       }
       pts.push(w2s(wx,wy));
     }
-    if(pts.length>1)drawSnake(s,pts,s.id===myId);
+
+    // === COSINE-style render smoothing (slither.io's fxs/fys equivalent) ===
+    // Lerp each rendered point toward the interpolated server position.
+    // This smooths sub-tick motion = slither's butter-smooth visuals.
+    let smooth=snakeSmoothedPts.get(s.id);
+    if(!smooth||smooth.length!==pts.length){
+      // First frame for this snake (or body length changed) — initialize
+      smooth=pts.map(p=>[p[0],p[1]]);
+    }else{
+      for(let i=0;i<pts.length;i++){
+        smooth[i][0]+=(pts[i][0]-smooth[i][0])*SMOOTH_FACTOR;
+        smooth[i][1]+=(pts[i][1]-smooth[i][1])*SMOOTH_FACTOR;
+      }
+    }
+    snakeSmoothedPts.set(s.id,smooth);
+
+    // === DYING TAIL crossfade (slither's "dying" tail mark) ===
+    if(s.dy&&s.dy.length>0){
+      for(let i=0;i<s.dy.length;i+=3){
+        const dx=s.dy[i],dy=s.dy[i+1],age=s.dy[i+2];
+        const alpha=Math.max(0,1-age/400);
+        const[sx,sy]=w2s(dx,dy);
+        ctx.beginPath();
+        ctx.arc(sx,sy,Math.max(8,s.r*ZOOM)*0.9,0,Math.PI*2);
+        ctx.fillStyle=s.c;
+        ctx.globalAlpha=alpha*0.6;
+        ctx.fill();
+        ctx.globalAlpha=1;
+      }
+    }
+
+    if(smooth.length>1)drawSnake(s,smooth,s.id===myId);
+  }
+  // Cleanup smoothed entries for snakes no longer present
+  for(const id of snakeSmoothedPts.keys()){
+    if(!next.s.find(x=>x.id===id))snakeSmoothedPts.delete(id);
   }
 
   // Active power-up HUD bars (compound — show all)

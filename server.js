@@ -104,10 +104,15 @@ class Room {
       id, ws, name: (name || "snake").slice(0, 14), isHost,
       color: validColor, pattern: validPattern,
       alive: false, points: [], heading: 0, targetAngle: 0,
-      // SCT = body part count (slither's "score" concept).
-      // Body grows by 1 sct per food eaten.
-      // Mass tracks fractional partial growth (carries between food orbs).
-      boost: false, sct: START_SCT, mass: START_SCT, _curSpeed: BASE_SPEED, _stormTicks: 0,
+      // sct  = body part count (slither: number of segments)
+      // fam  = fractional fullness 0..1 (slither: fullness on dying tail).
+      //        On food: fam += food_val. When fam >= 1: sct++, fam -= 1.
+      //        On boost drain / border: fam -= drain. When fam < 0:
+      //        sct--, fam += 1. (Matches slither's algorithm exactly.)
+      // _dyingPts: list of recently-trimmed tail points fading out
+      //           ({x, y, fadeStart} — render with alpha proportional to remaining time)
+      boost: false, sct: START_SCT, fam: 0, _curSpeed: BASE_SPEED, _stormTicks: 0,
+      _dyingPts: [],
     };
     this.players.set(id, p);
     this.send(p, { t: "welcome", id, room: this.code, isHost, settings: this.settings, isPublic: this.isPublic, isTestMode: this.isTestMode });
@@ -169,7 +174,8 @@ class Room {
     p.heading = Math.atan2(-hy, -hx);
     p.targetAngle = p.heading;
     p.sct = START_SCT;
-    p.mass = START_SCT;
+    p.fam = 0;                  // slither's fullness accumulator (0..1)
+    p._dyingPts = [];
     p.boost = false;
     p.alive = true;
     p._curSpeed = BASE_SPEED;
@@ -421,10 +427,11 @@ class Room {
       const isBoosting = p.boost && p.sct > BOOST_MIN_SCT;
       if (isBoosting) {
         targetSpeed += BOOST_DELTA * this.settings.boostSpeed;
-        // Slither: ~1% mass per second drain. At 125Hz: 0.008/tick.
+        // Slither: boost drain reduces fam (~1% of current size/sec).
+        // At 125Hz: 0.008 of one segment per tick.
         if (!this.hasPowerup(p, "boostme")) {
-          p.mass -= 0.008;
-          // Boost drops food trail (rate halved again for 125Hz)
+          p.fam -= 0.008;
+          // Boost drops food trail
           if (Math.random() < 0.045) {
             const tail = p.points[p.points.length - 1];
             if (tail) this.food.push({ x: tail.x, y: tail.y });
@@ -459,12 +466,35 @@ class Room {
       // Push new head to front (slither pushes to end, we unshift to front)
       p.points.unshift({ x: nx, y: ny });
 
-      // ===== GROW/SHRINK: bring sct closer to mass, 1/tick =====
-      if (p.mass >= p.sct + 1) p.sct++;
-      else if (p.mass < p.sct && p.sct > 2) p.sct--;
+      // ===== GROW/SHRINK via fam accumulator (slither.io exact) =====
+      // When fam >= 1: sct++, fam -= 1 (a full segment of growth has accumulated)
+      // When fam < 0: sct--, fam += 1 (lost a full segment of mass)
+      // Move 1 step per tick toward the target — gradual changes.
+      if (p.fam >= 1) {
+        p.sct++;
+        p.fam -= 1;
+      } else if (p.fam < 0 && p.sct > 2) {
+        p.sct--;
+        p.fam += 1;
+      }
 
-      // Trim body to current sct
-      while (p.points.length > p.sct) p.points.pop();
+      // Trim body to current sct — mark popped tail as DYING for crossfade
+      while (p.points.length > p.sct) {
+        const dyingTail = p.points.pop();
+        // Store for fade-out rendering (slither marks tail "dying")
+        if (dyingTail) {
+          p._dyingPts.push({
+            x: dyingTail.x,
+            y: dyingTail.y,
+            fadeStart: now,
+          });
+        }
+      }
+      // Clean up dying points that have fully faded (after 400ms)
+      const FADE_MS = 400;
+      while (p._dyingPts.length > 0 && now - p._dyingPts[0].fadeStart > FADE_MS) {
+        p._dyingPts.shift();
+      }
 
       // ===== CHAIN RELAXATION (slither's exact algorithm) =====
       // Skip head (index 0), first body (1), second body (2).
@@ -507,7 +537,7 @@ class Room {
       for (let i = this.food.length - 1; i >= 0; i--) {
         const f = this.food[i];
         if (dist2(h.x, h.y, f.x, f.y) < er2) {
-          p.mass += FOOD_VAL;
+          p.fam += FOOD_VAL;  // slither: fam accumulator
           this.food[i] = this.food[this.food.length - 1];
           this.food.pop();
         }
@@ -519,7 +549,7 @@ class Room {
         if (dist2(h.x, h.y, pu.x, pu.y) < 900) { // ~30px radius
           const duration = pu.type === "invincible" ? 10000 : 15000;
           p.powerups.push({ type: pu.type, until: now + duration });
-          if (pu.type === "jumbo") p.mass += 50; // adds 50 segments
+          if (pu.type === "jumbo") p.fam += 50; // adds ~50 segments via fam
           this.powerups.splice(i, 1);
           this.send(p, { t: "powerup", type: pu.type });
         }
@@ -563,12 +593,12 @@ class Room {
         p._stormTicks++;
         if (!this.hasPowerup(p, "invincible")) {
           const rampUp = 1 + p._stormTicks * 0.02; // scaled for 125Hz
-          p.mass -= BORDER_DRAIN * rampUp;
+          p.fam -= BORDER_DRAIN * rampUp;
           if (Math.random() < 0.15) {
             const tail = p.points[p.points.length - 1];
             if (tail) this.food.push({ x: tail.x, y: tail.y });
           }
-          if (p.mass <= 2) {
+          if (p.sct <= 2) {
             this.killSnake(p, "border");
             continue;
           }
@@ -656,12 +686,23 @@ class Room {
         const lastIdx = total - 1;
         pts.push(Math.round(p.points[lastIdx].x), Math.round(p.points[lastIdx].y));
       }
+      // Dying tail points for crossfade (slither's "dying" tail effect).
+      // Send each as [x, y, age_ms] so client can render with alpha.
+      const dying = [];
+      const tnow = Date.now();
+      for (const dp of p._dyingPts) {
+        const age = tnow - dp.fadeStart;
+        if (age < 400) {
+          dying.push(Math.round(dp.x), Math.round(dp.y), age);
+        }
+      }
       snakes.push({
         id: p.id, n: p.name, c: p.color, pat: p.pattern,
         r: Math.round(this.snakeRadius(p)),
         m: p.sct, p: pts,
         b: p.boost && p.sct > BOOST_MIN_SCT ? 1 : 0,
         pu: p.powerups.map(x => x.type),
+        dy: dying.length > 0 ? dying : undefined,
       });
     }
 
@@ -852,7 +893,8 @@ wss.on("connection", (ws, req) => {
         // Only allowed in test mode — adjust snake size for practice
         if (room.isTestMode && me.alive && typeof msg.delta === "number" && isFinite(msg.delta)) {
           const d = Math.max(-500, Math.min(500, Math.round(msg.delta)));
-          me.mass = Math.max(2, Math.min(5000, me.mass + d));
+          // Directly adjust sct in test mode (fam accumulator bypassed)
+          me.sct = Math.max(2, Math.min(5000, me.sct + d));
         }
         break;
       case "start":
