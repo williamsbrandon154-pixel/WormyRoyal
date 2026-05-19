@@ -423,10 +423,13 @@ class Room {
         y: head.y + Math.sin(p.heading) * speed,
       };
 
-      // ===== BODY: rigid chain — each segment at wsep behind ahead =====
-      // Slither.io exact algorithm. Each segment is pulled to exactly
-      // wsep units behind the segment ahead, along the chord.
-      // During boost, segments only catch up at CST rate (tail stretches).
+      // ===== BODY: rigid chain — each segment ALWAYS at exactly wsep =====
+      // Slither.io: each segment maintained exactly wsep units from the
+      // one ahead. We BIDIRECTIONALLY enforce this — pull if too far,
+      // push if too close. Previous code only pulled (`if dist > wsep`),
+      // which caused some segments to 'sit still' during tight spirals
+      // where they were already at wsep.
+      // During boost: enforcement rate is CST=0.43 → body stretches.
       const wsep = this.getWsep(p);
       const catchup = isBoosting ? CST : 1.0;
       for (let i = 1; i < p.points.length; i++) {
@@ -435,15 +438,15 @@ class Room {
         const dx = ahead.x - curr.x;
         const dy = ahead.y - curr.y;
         const dist = Math.hypot(dx, dy);
-        if (dist > wsep) {
-          // Excess gap — pull segment forward along chord by `excess * catchup`
-          const excess = (dist - wsep) * catchup;
+        if (dist > 0.001) {
+          // err: positive = too far (pull in), negative = too close (push out)
+          const err = dist - wsep;
+          const move = err * catchup / dist;
           p.points[i] = {
-            x: curr.x + (dx / dist) * excess,
-            y: curr.y + (dy / dist) * excess,
+            x: curr.x + dx * move,
+            y: curr.y + dy * move,
           };
         }
-        // If dist <= wsep, segment stays (rigid chain doesn't push apart)
       }
 
       // ===== GROWTH: add tail segment when fam fills =====
@@ -630,9 +633,18 @@ class Room {
     for (const p of this.players.values()) {
       if (!p.alive) continue;
       const pts = [];
-      // Send every 3rd point instead of every 2nd — cuts bandwidth 33%
-      for (let i = 0; i < p.points.length; i += 3) {
+      // Adaptive subsampling: small snakes send every point (smooth viz),
+      // big snakes subsample to save bandwidth.
+      // Always include the head and tail points exactly.
+      const total = p.points.length;
+      const step = total < 30 ? 1 : (total < 80 ? 2 : 3);
+      for (let i = 0; i < total; i += step) {
         pts.push(Math.round(p.points[i].x), Math.round(p.points[i].y));
+      }
+      // Ensure tail is always sent
+      if ((total - 1) % step !== 0 && total > 1) {
+        const lastIdx = total - 1;
+        pts.push(Math.round(p.points[lastIdx].x), Math.round(p.points[lastIdx].y));
       }
       snakes.push({
         id: p.id, n: p.name, c: p.color, pat: p.pattern,
