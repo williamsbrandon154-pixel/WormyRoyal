@@ -472,11 +472,101 @@ const snapBuf=[];
 const SNAP_MAX=12;
 const RENDER_DELAY=45; // ms behind latest snapshot (was 80 — overly conservative)
 
-// === Render smoothing removed ===
-// Server now runs slither's chain relaxation per push, which smooths
-// the body. Adding client-side lerp on top creates visible lag (rendered
-// position trails actual position by 100-150ms). Linear interp between
-// 30Hz snapshots is enough.
+// === SLITHER.IO exact render smoothing — cosine ring buffer per body point ===
+// From slither.io/s/game.js: each body point has fxs[hfc]/fys[hfc] ring buffers.
+// When the point's position changes by (dx, dy), the delta is written across
+// the ring with cosine kernel hfas[]:
+//   for j in 0..hfc:   fxs[(fpos+j)%hfc] -= dx * hfas[j]
+// Each render frame, read and clear the front of the ring, advance fpos:
+//   fx = fxs[fpos]; fxs[fpos] = 0; fpos = (fpos+1) % hfc; ftg--
+// Rendered position = point.xx + fx
+// Result: when a point moves, the rendered position transitions smoothly
+// over hfc frames via a cosine curve. Slither's signature butter motion.
+const HFC = 53;  // slither's eez/hfc value
+const hfas = new Float32Array(HFC);
+for (let i = 0; i < HFC; i++) {
+  hfas[i] = 0.5 * (1 - Math.cos(Math.PI * (HFC - 1 - i) / (HFC - 1)));
+}
+// snake_id → { perPoint:[{fxs,fys,lastX,lastY,fx,fy}], fpos, ftg }
+const snakeBuffers = new Map();
+// snake_id → last snapshot timestamp processed (so we apply delta only on new snapshots)
+const snakeLastSnap = new Map();
+
+// On a new snapshot, compute per-body-point delta and write -dx*hfas[j]
+// into the ring across 53 future render frames. Matches slither.io exactly.
+function applyToRing(snakeId, snapshotTime, points){
+  const lastTime = snakeLastSnap.get(snakeId);
+  if (lastTime === snapshotTime) return;
+  snakeLastSnap.set(snakeId, snapshotTime);
+
+  const numPoints = points.length >> 1;
+  let buf = snakeBuffers.get(snakeId);
+  if (!buf){
+    buf = { perPoint: [], fpos: 0, ftg: 0 };
+    snakeBuffers.set(snakeId, buf);
+  }
+
+  // Body grew at head (server unshifts new points to index 0): insert new
+  // entries at the front of perPoint, initialized so they appear in place
+  // with no smoothing artifact.
+  const oldNum = buf.perPoint.length;
+  if (numPoints > oldNum){
+    const growBy = numPoints - oldNum;
+    const newEntries = [];
+    for (let g = 0; g < growBy; g++){
+      newEntries.push({
+        fxs: new Float32Array(HFC),
+        fys: new Float32Array(HFC),
+        lastX: points[g*2],
+        lastY: points[g*2+1],
+        fx: 0,
+        fy: 0,
+      });
+    }
+    buf.perPoint = newEntries.concat(buf.perPoint);
+  } else if (numPoints < oldNum){
+    // Body shrunk at tail — pop from end
+    buf.perPoint.length = numPoints;
+  }
+
+  // Write per-point deltas across the cosine ring (slither's exact loop).
+  for (let i = 0; i < numPoints; i++){
+    const pp = buf.perPoint[i];
+    const nx = points[i*2];
+    const ny = points[i*2+1];
+    const dx = nx - pp.lastX;
+    const dy = ny - pp.lastY;
+    pp.lastX = nx;
+    pp.lastY = ny;
+    if (dx === 0 && dy === 0) continue;
+
+    let k = buf.fpos;
+    for (let j = 0; j < HFC; j++){
+      pp.fxs[k] -= dx * hfas[j];
+      pp.fys[k] -= dy * hfas[j];
+      k++;
+      if (k >= HFC) k = 0;
+    }
+  }
+  buf.ftg = HFC;
+}
+
+// Per render frame: read fxs[fpos]/fys[fpos] into pp.fx/pp.fy, clear that
+// slot, advance fpos, decrement ftg. Matches slither.io exactly.
+function advanceRing(snakeId){
+  const buf = snakeBuffers.get(snakeId);
+  if (!buf || buf.ftg <= 0) return;
+  for (let i = 0; i < buf.perPoint.length; i++){
+    const pp = buf.perPoint[i];
+    pp.fx = pp.fxs[buf.fpos];
+    pp.fy = pp.fys[buf.fpos];
+    pp.fxs[buf.fpos] = 0;
+    pp.fys[buf.fpos] = 0;
+  }
+  buf.fpos++;
+  if (buf.fpos >= HFC) buf.fpos = 0;
+  buf.ftg--;
+}
 let camX=0,camY=0;
 const isTouch=matchMedia("(pointer:coarse)").matches;
 const ZOOM_BASE=isTouch?0.40:1.5; // slightly higher mobile base since we now zoom out with growth
@@ -1221,16 +1311,26 @@ function render(){
   if(fwParticles.length>0)renderFireworks();
 
   if(!bracket){ctx.fillStyle="#0a0f1a";ctx.fillRect(0,0,W,H);return}
-  const{prev,next,t}=bracket;
-  const a=Math.max(0,Math.min(1,t)); // always 0-1, never extrapolate
+  const{next}=bracket; // body smoothing now lives in the cosine ring buffer
+
+  // Apply slither's cosine ring smoothing for every snake first, so the
+  // camera target and the rendered head stay in sync (both use the same
+  // smoothed position).
+  for(const s of next.s){
+    applyToRing(s.id, next._t, s.p);
+    advanceRing(s.id);
+  }
 
   // Camera + dynamic zoom (slither.io style: zoom out as you grow)
   let me=findSn(next,myId);
   if(!me&&next.s.length)me=next.s[0];
   if(me){
-    const mp=findSn(prev,me.id);
-    let tx=me.p[0],ty=me.p[1];
-    if(mp){tx=mp.p[0]+(me.p[0]-mp.p[0])*a;ty=mp.p[1]+(me.p[1]-mp.p[1])*a}
+    const meBuf=snakeBuffers.get(me.id);
+    const meHead=meBuf&&meBuf.perPoint[0];
+    const headFx=meHead?meHead.fx:0;
+    const headFy=meHead?meHead.fy:0;
+    const tx=me.p[0]+headFx;
+    const ty=me.p[1]+headFy;
     camX+=(tx-camX)*0.15;camY+=(ty-camY)*0.15;
 
     // Camera zoom out based on snake size — but more conservative than
@@ -1327,32 +1427,33 @@ function render(){
   ctx.strokeStyle=`rgba(255,200,210,${pulseA*0.4})`;
   ctx.lineWidth=1;ctx.stroke();
 
-  // Snakes — smooth interpolation throughout. Server sends sub-pixel tail.
-  // When next has MORE points than prev (the body grew by a new tail point),
-  // we interp the "extra" points from prev's last position so they smoothly
-  // fade in — no abrupt appearance.
+  // Snakes — slither.io exact render smoothing.
+  // Ring buffers were already applied at the top of render() so camera
+  // and body stay in sync. Here we just read pp.fx/pp.fy per body point.
   for(const s of next.s){
-    const ps=findSn(prev,s.id);
-    const pts=[];
-    const nLen=s.p.length;
-    const pLen=ps?ps.p.length:0;
-    const ptailX=pLen>=2?ps.p[pLen-2]:0;
-    const ptailY=pLen>=2?ps.p[pLen-1]:0;
-    for(let i=0;i<nLen;i+=2){
-      let wx=s.p[i],wy=s.p[i+1];
-      if(ps){
-        if(i<pLen){
-          wx=ps.p[i]+(s.p[i]-ps.p[i])*a;
-          wy=ps.p[i+1]+(s.p[i+1]-ps.p[i+1])*a;
-        }else if(pLen>=2){
-          wx=ptailX+(s.p[i]-ptailX)*a;
-          wy=ptailY+(s.p[i+1]-ptailY)*a;
-        }
-      }
-      pts.push(w2s(wx,wy));
+    const buf = snakeBuffers.get(s.id);
+    const pts = [];
+    for(let i = 0; i < s.p.length; i += 2){
+      const pi = i >> 1;
+      const pp = buf ? buf.perPoint[pi] : null;
+      const fx = pp ? pp.fx : 0;
+      const fy = pp ? pp.fy : 0;
+      pts.push(w2s(s.p[i] + fx, s.p[i+1] + fy));
     }
 
     if(pts.length>1)drawSnake(s,pts,s.id===myId);
+  }
+
+  // GC ring-buffer state for snakes that died or left.
+  if (snakeBuffers.size > next.s.length){
+    const liveIds = new Set();
+    for (const s of next.s) liveIds.add(s.id);
+    for (const id of [...snakeBuffers.keys()]){
+      if (!liveIds.has(id)){
+        snakeBuffers.delete(id);
+        snakeLastSnap.delete(id);
+      }
+    }
   }
 
   // Active power-up HUD bars (compound — show all)
