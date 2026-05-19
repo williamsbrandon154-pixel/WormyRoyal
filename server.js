@@ -10,24 +10,28 @@ const TICK_MS          = 8;               // 125Hz physics — slither.io's exac
 const COUNTDOWN_MS     = 5000;
 const POSTGAME_MS      = 9000;
 
-// ===== SLITHER.IO PHYSICS CONSTANTS (per reverse-engineered protocol) =====
-// Slither runs at 125Hz (8ms tick) — we now match exactly.
-//   MAMU  = 0.033 rad / 8ms = 4.125 rad/s  (base turn rate)
-//   SSP   = 5.39 + 0.4 * sc per 8ms         (speed scaling)
-//   WSEP  = 6 * sc                           (segment spacing)
-const TURN_PER_TICK    = 0.033;           // slither's exact MAMU
+// ===== SLITHER.IO PHYSICS CONSTANTS (READ FROM ACTUAL SOURCE) =====
+// Pulled live from slither.io/s/game.js:
+//   spangdv = 4.8
+//   nsp1 = 4.25, nsp2 = 0.5, nsp3 = 12
+//   mamu = 0.033, mamu2 = 0.028
+//   cst = 0.43  (chain catch-up — used every tick in body relaxation)
+const TURN_PER_TICK    = 0.033;           // slither's MAMU
 const BASE_SPEED       = 1.2;             // px per 8ms tick at sc=1 = 150 px/s
-// Slither boost ≈ 2.4× base. Base 1.2 → boost total 2.88 (delta +1.68)
-const BOOST_DELTA      = 1.68;            // px/tick added during boost
+const NSP1             = 4.25;            // slither's nsp1 (speed base)
+const NSP2             = 0.5;             // slither's nsp2 (speed per sc)
+// Slither boost: nsp3=12 = absolute boost speed in slither units.
+// Boost ratio nsp3 / (nsp1+nsp2) = 12 / 4.75 = 2.526× base
+// In our units: BOOST adds enough delta to reach 2.5× total.
+const BOOST_DELTA      = 1.83;            // px/tick added during boost (gives ~2.5× total)
 const START_SCT        = 8;
 const BOOST_MIN_SCT    = 5;
-const WSEP_BASE        = 6;               // wsep = WSEP_BASE * sc — slither.io exact value
+const WSEP_BASE        = 6;               // slither's wsep = 6 * sc
 const BODY_R_BASE      = 5;
 const FOOD_TARGET      = 200;
-const FOOD_VAL         = 1;
-const BORDER_DRAIN     = 0.144;           // body parts lost per tick in storm (18/sec at 125Hz)
-// Broadcast every 4th tick → 31.25Hz network rate (same bandwidth as before)
-const BROADCAST_EVERY  = 4;
+const FOOD_VAL         = 1;               // fam value per food (slither has variable, ours fixed)
+const BORDER_DRAIN     = 0.144;           // body parts lost per tick in storm (custom)
+const BROADCAST_EVERY  = 4;               // 30Hz network despite 125Hz physics
 
 const COLORS = [
   "#37e6c9", "#ff5da2", "#ffd23f", "#7c5cff",
@@ -205,12 +209,12 @@ class Room {
     if (this.hasPowerup(p, "jumbo")) r *= 1.6;
     return r;
   }
-  // speed per tick, slither's scaling
+  // speed per tick, slither's exact ssp formula
   getSpeed(p) {
     const sc = this.getSC(p);
-    // Slither: ssp = 5.39 + 0.4*sc per 8ms. Ratio to our base.
-    const slitherRatio = (5.39 + 0.4 * sc) / 5.39;
-    return BASE_SPEED * slitherRatio;
+    // Slither: ssp = nsp1 + nsp2*sc per 8ms (nsp1=4.25, nsp2=0.5)
+    // Normalized to sc=1 baseline (= NSP1 + NSP2 = 4.75)
+    return BASE_SPEED * (NSP1 + NSP2 * sc) / (NSP1 + NSP2);
   }
 
   /* ---- food ---- */
