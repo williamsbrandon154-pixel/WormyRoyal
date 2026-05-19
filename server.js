@@ -409,7 +409,8 @@ class Room {
       const scang = this.getScang(sc);
       const turnRate = TURN_PER_TICK * scang * this.settings.snakeSpeed;
       const d = angleDelta(p.heading, p.targetAngle);
-      p.heading += Math.max(-turnRate, Math.min(turnRate, d));
+      const turnApplied = Math.max(-turnRate, Math.min(turnRate, d));
+      p.heading += turnApplied;
 
       // ===== SPEED (slither.io: ssp = 5.39 + 0.4*sc) =====
       let targetSpeed = this.getSpeed(p) * this.settings.snakeSpeed;
@@ -429,15 +430,28 @@ class Room {
       p._curSpeed += (targetSpeed - p._curSpeed) * 0.4;
       const speed = p._curSpeed;
 
-      // ===== HEAD + BODY: queue-based (slither.io style) =====
+      // ===== HEAD + BODY: queue-based with active inward spiral =====
       // Body is the head's PAST positions sampled at wsep intervals.
-      // This means the body literally traces the head's path — when
-      // the head circles, the body wraps around the circle naturally,
-      // forming the slither.io coil shape.
+      // PLUS: when the head is turning, we apply an extra inward drift
+      // perpendicular to heading (toward the inside of the turn).
+      // This makes continuous circling produce a visible inward
+      // spiral — the slither.io "coil tightens into itself" feel.
       const wsep = this.getWsep(p);
       const head = p.points[0];
-      const nx = head.x + Math.cos(p.heading) * speed;
-      const ny = head.y + Math.sin(p.heading) * speed;
+      let nx = head.x + Math.cos(p.heading) * speed;
+      let ny = head.y + Math.sin(p.heading) * speed;
+
+      // Inward drift: when heading rotated this tick, push head toward
+      // the center of the turn. Amount proportional to how much we turned.
+      if (Math.abs(turnApplied) > 0.001) {
+        const turnSign = turnApplied > 0 ? 1 : -1;
+        const inwardDir = p.heading + turnSign * Math.PI / 2;
+        // Drift = (turn fraction of max) * speed * coil strength
+        const COIL_INWARD = 0.65;
+        const driftAmount = Math.abs(turnApplied) * speed * COIL_INWARD;
+        nx += Math.cos(inwardDir) * driftAmount;
+        ny += Math.sin(inwardDir) * driftAmount;
+      }
 
       if (!p._stepAcc) p._stepAcc = 0;
       p._stepAcc += speed;
