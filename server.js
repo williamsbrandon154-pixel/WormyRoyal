@@ -17,17 +17,18 @@ const POSTGAME_MS      = 9000;
 //   SSP   = 5.39 + 0.4 * sc per 8ms        (slither speed in their units)
 //   WSEP  = 6 * sc                          (segment spacing)
 //   CST   = 0.43                            (tail catch-up ratio during boost)
-const TURN_PER_TICK    = 0.033 * (33/8);  // = 0.1375 rad/30Hz tick
+const TURN_PER_TICK    = 0.033 * (33/8);  // = 0.1375 rad/30Hz tick (slither's MAMU)
 const BASE_SPEED       = 5.0;             // px per 30Hz tick at sc=1
-const BOOST_DELTA      = 1.8;             // extra px/tick during boost (small, slither-ish)
+// Slither: fsp ≈ 2.4 × ssp during boost. We use additive delta.
+// With BASE_SPEED=5 → boost total = 5 + 7 = 12 ≈ 2.4× base ✓
+const BOOST_DELTA      = 7.0;             // px/tick added during boost (matches slither's 2.4× ratio)
 const START_SCT        = 8;               // body parts at spawn
 const BOOST_MIN_SCT    = 5;
-const WSEP_BASE        = 4;               // wsep = WSEP_BASE * sc — middle ground
+const WSEP_BASE        = 6;               // wsep = WSEP_BASE * sc — slither.io exact value
 const BODY_R_BASE      = 5;               // body_r = BODY_R_BASE + 5 * sc
 const FOOD_TARGET      = 200;
 const FOOD_VAL         = 1;               // each food orb = 1 body part of growth
-const BORDER_DRAIN     = 0.6;             // body parts lost per tick in storm
-const CST              = 0.43;            // tail catch-up rate during boost (slither's)
+const BORDER_DRAIN     = 0.6;             // body parts lost per tick in storm (custom, not slither)
 
 const COLORS = [
   "#37e6c9", "#ff5da2", "#ffd23f", "#7c5cff",
@@ -456,8 +457,11 @@ class Room {
       // Save current head position to the path (dense — every tick)
       if (!p._headPath) p._headPath = [];
       p._headPath.unshift({ x: nx, y: ny });
-      // Cap path length to what's needed for the body + safety margin
-      const maxPath = Math.max(50, p.sct * 4);
+      // Cap path length. Need enough entries to cover full body arc length:
+      //   total arc = sct * wsep, path entries are speed px apart
+      //   so entries needed = sct * wsep / speed
+      //   With sc maxing at 6: ratio ~6 is plenty.
+      const maxPath = Math.max(100, p.sct * 6);
       if (p._headPath.length > maxPath) p._headPath.length = maxPath;
 
       // ===== GROW/SHRINK: bring sct closer to mass, 1/tick =====
