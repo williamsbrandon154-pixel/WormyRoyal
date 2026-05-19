@@ -22,7 +22,7 @@ const BASE_SPEED       = 5.0;             // px per 30Hz tick at sc=1
 const BOOST_DELTA      = 1.8;             // extra px/tick during boost (small, slither-ish)
 const START_SCT        = 8;               // body parts at spawn
 const BOOST_MIN_SCT    = 5;
-const WSEP_BASE        = 6;               // wsep = WSEP_BASE * sc (slither's actual value)
+const WSEP_BASE        = 3;               // wsep = WSEP_BASE * sc — shorter body so it coils visibly
 const BODY_R_BASE      = 5;               // body_r = BODY_R_BASE + 5 * sc
 const FOOD_TARGET      = 200;
 const FOOD_VAL         = 1;               // each food orb = 1 body part of growth
@@ -457,11 +457,13 @@ class Room {
         }
       }
 
-      // ===== GROWTH: add tail segment when fam fills =====
-      // Slither: mass increase accumulates 'fam' fullness. When fam >= 1,
-      // sct += 1 and a new tail segment is extruded.
-      // We use mass directly as fractional sct. When mass > sct, grow.
-      while (p.mass >= p.sct + 1 && p.points.length >= 2) {
+      // ===== GROWTH: add tail segments gradually =====
+      // Slither: mass increase accumulates fullness. When mass crosses
+      // sct+1 threshold, a new segment is added at the tail.
+      // CRITICAL: limit to 1 segment per tick so rapid mass changes
+      // (like test mode Shift+↑ for +100) don't extrude all segments
+      // in the same direction. Body grows naturally over time.
+      if (p.mass >= p.sct + 1 && p.points.length >= 2) {
         p.sct++;
         const last = p.points[p.points.length - 1];
         const prev = p.points[p.points.length - 2];
@@ -480,8 +482,9 @@ class Room {
           });
         }
       }
-      // ===== SHRINK: remove tail when mass drops below sct =====
-      while (p.mass < p.sct && p.sct > 2 && p.points.length > 2) {
+      // ===== SHRINK: remove 1 tail segment per tick =====
+      // Same rationale as growth — gradual change avoids body jumps.
+      if (p.mass < p.sct && p.sct > 2 && p.points.length > 2) {
         p.sct--;
         p.points.pop();
       }
