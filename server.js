@@ -22,7 +22,7 @@ const BASE_SPEED       = 5.0;             // px per 30Hz tick at sc=1
 const BOOST_DELTA      = 1.8;             // extra px/tick during boost (small, slither-ish)
 const START_SCT        = 8;               // body parts at spawn
 const BOOST_MIN_SCT    = 5;
-const WSEP_BASE        = 3;               // wsep = WSEP_BASE * sc — shorter body so it coils visibly
+const WSEP_BASE        = 6;               // wsep = WSEP_BASE * sc — slither.io's exact value
 const BODY_R_BASE      = 5;               // body_r = BODY_R_BASE + 5 * sc
 const FOOD_TARGET      = 200;
 const FOOD_VAL         = 1;               // each food orb = 1 body part of growth
