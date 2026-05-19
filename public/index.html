@@ -470,15 +470,13 @@ addEventListener("keydown",e=>{
 // Snapshot buffer for smooth interpolation
 const snapBuf=[];
 const SNAP_MAX=12;
-const RENDER_DELAY=80; // ms behind latest snapshot
+const RENDER_DELAY=45; // ms behind latest snapshot (was 80 — overly conservative)
 
-// === Slither.io style render smoothing ===
-// Slither uses a cosine-window ring buffer (fxs/fys) to smooth motion
-// between physics ticks. We replicate via per-snake smoothed-position
-// buffers that lerp toward the interpolated server positions.
-// SMOOTH_FACTOR 0.35 ≈ slither's hfas cosine bell kernel average response.
-const snakeSmoothedPts=new Map(); // id → array of [sx,sy] smoothed positions
-const SMOOTH_FACTOR=0.35;
+// === Render smoothing removed ===
+// Server now runs slither's chain relaxation per push, which smooths
+// the body. Adding client-side lerp on top creates visible lag (rendered
+// position trails actual position by 100-150ms). Linear interp between
+// 30Hz snapshots is enough.
 let camX=0,camY=0;
 const isTouch=matchMedia("(pointer:coarse)").matches;
 const ZOOM_BASE=isTouch?0.40:1.5; // slightly higher mobile base since we now zoom out with growth
@@ -869,10 +867,12 @@ cv.addEventListener("touchend",e=>{
   if(e.touches.length<2)boosting=false; // released second finger
 },{passive:true});
 // Boost button hidden on touch — second finger handles it
+// Input at 60Hz — was 30Hz which throttled head responsiveness on a
+// 125Hz server. Now the server gets fresh input every 16ms.
 setInterval(()=>{
   if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"input",angle:aim,boost:boosting}));
   if(boosting&&amAlive)startBoostSound();else stopBoostSound();
-},33);
+},16);
 // Legacy joinBtn removed — handled by quickPlayBtn/joinPrivateBtn/createPrivateBtn
 $("startBtn").onclick=()=>{sendSettings();ws&&ws.send(JSON.stringify({t:"start"}))};
 function sendSettings(){
@@ -1352,29 +1352,7 @@ function render(){
       pts.push(w2s(wx,wy));
     }
 
-    // === COSINE-style render smoothing (slither.io's fxs/fys equivalent) ===
-    // Lerp each rendered point toward the interpolated server position.
-    // This smooths sub-tick motion = slither's butter-smooth visuals.
-    let smooth=snakeSmoothedPts.get(s.id);
-    if(!smooth||smooth.length!==pts.length){
-      // First frame for this snake (or body length changed) — initialize
-      smooth=pts.map(p=>[p[0],p[1]]);
-    }else{
-      for(let i=0;i<pts.length;i++){
-        smooth[i][0]+=(pts[i][0]-smooth[i][0])*SMOOTH_FACTOR;
-        smooth[i][1]+=(pts[i][1]-smooth[i][1])*SMOOTH_FACTOR;
-      }
-    }
-    snakeSmoothedPts.set(s.id,smooth);
-
-    // Dying tail crossfade removed — was producing visible "blob glow"
-    // artifacts behind the snake. The natural body trim looks cleaner.
-
-    if(smooth.length>1)drawSnake(s,smooth,s.id===myId);
-  }
-  // Cleanup smoothed entries for snakes no longer present
-  for(const id of snakeSmoothedPts.keys()){
-    if(!next.s.find(x=>x.id===id))snakeSmoothedPts.delete(id);
+    if(pts.length>1)drawSnake(s,pts,s.id===myId);
   }
 
   // Active power-up HUD bars (compound — show all)

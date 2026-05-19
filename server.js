@@ -439,7 +439,8 @@ class Room {
           }
         }
       }
-      p._curSpeed += (targetSpeed - p._curSpeed) * 0.12;
+      // Snappy speed response — slither's boost engages quickly
+      p._curSpeed += (targetSpeed - p._curSpeed) * 0.35;
       const speed = p._curSpeed;
 
       // ===== HEAD + BODY: SLITHER.IO actual architecture =====
@@ -796,7 +797,7 @@ const server = http.createServer((req, res) => {
 // ===== SECURITY: Rate limiting per IP =====
 const ipConnections = new Map(); // ip -> { count, lastClean }
 const MAX_CONNS_PER_IP = 6;
-const MSG_RATE_LIMIT = 30; // max messages per second per connection
+const MSG_RATE_LIMIT = 80; // max messages/sec/connection (client sends 60Hz input + occasional control)
 
 const wss = new WebSocketServer({
   server,
