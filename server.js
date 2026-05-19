@@ -22,7 +22,7 @@ const BASE_SPEED       = 5.0;             // px per 30Hz tick at sc=1
 const BOOST_DELTA      = 1.8;             // extra px/tick during boost (small, slither-ish)
 const START_SCT        = 8;               // body parts at spawn
 const BOOST_MIN_SCT    = 5;
-const WSEP_BASE        = 4;               // wsep = WSEP_BASE * sc (segment spacing px)
+const WSEP_BASE        = 6;               // wsep = WSEP_BASE * sc (slither's actual value)
 const BODY_R_BASE      = 5;               // body_r = BODY_R_BASE + 5 * sc
 const FOOD_TARGET      = 200;
 const FOOD_VAL         = 1;               // each food orb = 1 body part of growth
@@ -172,7 +172,6 @@ class Room {
 
     p.powerups = [];        // array of {type, until}
     p.points = [];
-    p._prevPts = null;      // Verlet history — reset on respawn
     // Initial body: START_SCT segments laid out behind the head at wsep spacing
     const wsep = this.getWsep(p);
     for (let i = 0; i < START_SCT; i++) {
@@ -424,52 +423,25 @@ class Room {
         y: head.y + Math.sin(p.heading) * speed,
       };
 
-      // ===== BODY: VERLET PHYSICS (slither.io's real algorithm) =====
-      // Each segment has INERTIA (carries previous velocity), then rigid
-      // wsep constraint pulls it back. This gives the body real weight —
-      // segments don't snap to position, they have momentum.
-      // Body slithers naturally; tail never freezes.
+      // ===== BODY: simple rigid chain at wsep =====
+      // Each segment is pulled (or pushed) to exactly wsep behind the
+      // one ahead. Boost uses elastic catch-up rate CST so the body
+      // visibly stretches during the boost.
       const wsep = this.getWsep(p);
-
-      // Sync prev_points length with current body
-      if (!p._prevPts) p._prevPts = [];
-      while (p._prevPts.length < p.points.length) {
-        const pt = p.points[p._prevPts.length];
-        p._prevPts.push({ x: pt.x, y: pt.y });
-      }
-      while (p._prevPts.length > p.points.length) p._prevPts.pop();
-
-      // 1. Verlet step — each segment continues with damped velocity
-      const DAMP = isBoosting ? 0.80 : 0.85;
+      const k = isBoosting ? CST : 1.0;
       for (let i = 1; i < p.points.length; i++) {
+        const ahead = p.points[i - 1];
         const curr = p.points[i];
-        const prev = p._prevPts[i];
-        const vx = (curr.x - prev.x) * DAMP;
-        const vy = (curr.y - prev.y) * DAMP;
-        // Save current as previous BEFORE updating
-        p._prevPts[i] = { x: curr.x, y: curr.y };
-        // Apply inertia
-        p.points[i] = { x: curr.x + vx, y: curr.y + vy };
-      }
-
-      // 2. Constraint pass — pull each segment back to wsep behind ahead
-      // Multiple iterations for stable rigid chain feel.
-      const ITERS = isBoosting ? 2 : 4;
-      for (let iter = 0; iter < ITERS; iter++) {
-        for (let i = 1; i < p.points.length; i++) {
-          const ahead = p.points[i - 1];
-          const curr = p.points[i];
-          const dx = ahead.x - curr.x;
-          const dy = ahead.y - curr.y;
-          const dist = Math.hypot(dx, dy);
-          if (dist > 0.001) {
-            const err = dist - wsep;
-            const move = err / dist;
-            p.points[i] = {
-              x: curr.x + dx * move,
-              y: curr.y + dy * move,
-            };
-          }
+        const dx = ahead.x - curr.x;
+        const dy = ahead.y - curr.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 0.001) {
+          const err = dist - wsep;
+          const move = err * k / dist;
+          p.points[i] = {
+            x: curr.x + dx * move,
+            y: curr.y + dy * move,
+          };
         }
       }
 
