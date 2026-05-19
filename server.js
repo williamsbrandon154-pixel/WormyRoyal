@@ -10,17 +10,24 @@ const TICK_MS          = 33;
 const COUNTDOWN_MS     = 5000;
 const POSTGAME_MS      = 9000;
 
-const BASE_SPEED       = 5.0;
-const BOOST_SPEED      = 11.0;
-const TURN_RATE        = 0.22;
-const START_MASS        = 14;
-const BOOST_MIN_MASS   = 9;
-const BOOST_DRAIN      = 0.09;
-const POINT_STEP       = 4.2;
+// ===== SLITHER.IO PHYSICS CONSTANTS (per reverse-engineered protocol) =====
+// Slither runs at 125Hz (8ms tick). We run at 30Hz, so all per-tick values
+// here are scaled to maintain the same per-second rates.
+//   MAMU  = 0.033 rad / 8ms = 4.125 rad/s  (base turn rate)
+//   SSP   = 5.39 + 0.4 * sc per 8ms        (slither speed in their units)
+//   WSEP  = 6 * sc                          (segment spacing)
+//   CST   = 0.43                            (tail catch-up ratio during boost)
+const TURN_PER_TICK    = 0.033 * (33/8);  // = 0.1375 rad/30Hz tick
+const BASE_SPEED       = 5.0;             // px per 30Hz tick at sc=1
+const BOOST_DELTA      = 1.8;             // extra px/tick during boost (small, slither-ish)
+const START_SCT        = 8;               // body parts at spawn
+const BOOST_MIN_SCT    = 5;
+const WSEP_BASE        = 4;               // wsep = WSEP_BASE * sc (segment spacing px)
+const BODY_R_BASE      = 5;               // body_r = BODY_R_BASE + 5 * sc
 const FOOD_TARGET      = 200;
-const FOOD_MASS        = 1;
-const SNAKE_BASE_R     = 6;
-const BORDER_DRAIN     = 0.35;  // mass lost per tick while in the storm
+const FOOD_VAL         = 1;               // each food orb = 1 body part of growth
+const BORDER_DRAIN     = 0.6;             // body parts lost per tick in storm
+const CST              = 0.43;            // tail catch-up rate during boost (slither's)
 
 const COLORS = [
   "#37e6c9", "#ff5da2", "#ffd23f", "#7c5cff",
@@ -92,7 +99,10 @@ class Room {
       id, ws, name: (name || "snake").slice(0, 14), isHost,
       color: validColor, pattern: validPattern,
       alive: false, points: [], heading: 0, targetAngle: 0,
-      boost: false, mass: START_MASS, _stepAcc: 0, _curSpeed: BASE_SPEED, _stormTicks: 0,
+      // SCT = body part count (slither's "score" concept).
+      // Body grows by 1 sct per food eaten.
+      // Mass tracks fractional partial growth (carries between food orbs).
+      boost: false, sct: START_SCT, mass: START_SCT, _curSpeed: BASE_SPEED, _stormTicks: 0,
     };
     this.players.set(id, p);
     this.send(p, { t: "welcome", id, room: this.code, isHost, settings: this.settings, isPublic: this.isPublic });
@@ -153,41 +163,52 @@ class Room {
     }
     p.heading = Math.atan2(-hy, -hx);
     p.targetAngle = p.heading;
-    p.mass = START_MASS;
+    p.sct = START_SCT;
+    p.mass = START_SCT;
     p.boost = false;
     p.alive = true;
-    p._stepAcc = 0;
     p._curSpeed = BASE_SPEED;
     p._stormTicks = 0;
-    p._boostTicks = 0;
-    p._displayLen = null;   // resets to targetLen on first tick
 
     p.powerups = [];        // array of {type, until}
     p.points = [];
-    for (let i = 0; i < 12; i++) {
+    // Initial body: START_SCT segments laid out behind the head at wsep spacing
+    const wsep = this.getWsep(p);
+    for (let i = 0; i < START_SCT; i++) {
       p.points.push({
-        x: hx - Math.cos(p.heading) * i * POINT_STEP,
-        y: hy - Math.sin(p.heading) * i * POINT_STEP,
+        x: hx - Math.cos(p.heading) * i * wsep,
+        y: hy - Math.sin(p.heading) * i * wsep,
       });
     }
   }
 
   hasPowerup(p, type) { return p.powerups.some(pu => pu.type === type); }
 
+  // === SLITHER.IO CORE FORMULAS ===
+  // sc = thickness factor, ranges 1 (tiny) to 6 (max)
+  getSC(p) {
+    return Math.min(6, 1 + (p.sct - 2) / 106);
+  }
+  // scang = turn rate scaler, quadratic falloff
+  getScang(sc) {
+    return 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
+  }
+  // wsep = segment spacing in pixels (scales with thickness)
+  getWsep(p) {
+    return WSEP_BASE * this.getSC(p);
+  }
+  // body radius (visual + collision)
   snakeRadius(p) {
-    // Matched to slither.io's actual body proportions (from gameplay
-    // footage analysis). Slither snakes are visibly THICK even at low
-    // scores — small snake body ~30px wide, max ~70-80px.
-    //   mass 14→14, mass 50→18, mass 100→22, mass 270→28, mass 1000→34, max→38
-    let r = SNAKE_BASE_R + 7 + 26 * (1 - 1 / (1 + p.mass / 200));
+    let r = BODY_R_BASE + 5 * this.getSC(p);
     if (this.hasPowerup(p, "jumbo")) r *= 1.6;
     return r;
   }
-  targetLen(p) {
-    // Slither.io style: length scales with sqrt(mass).
-    // Doubling your mass doesn't double your length — diminishing returns.
-    // mass 10→170, mass 50→307, mass 200→555, mass 1000→1167.
-    return 60 + 35 * Math.sqrt(p.mass);
+  // speed per tick, slither's scaling
+  getSpeed(p) {
+    const sc = this.getSC(p);
+    // Slither: ssp = 5.39 + 0.4*sc per 8ms. Ratio to our base.
+    const slitherRatio = (5.39 + 0.4 * sc) / 5.39;
+    return BASE_SPEED * slitherRatio;
   }
 
   /* ---- food ---- */
@@ -262,12 +283,11 @@ class Room {
   killSnake(p, reason) {
     if (!p.alive) return;
     p.alive = false;
-    // Slither.io: dead snakes drop ~70% of their mass as food.
-    // Distribute drops ALONG the body so it looks like the snake collapsed.
-    const drops = Math.min(400, Math.floor(p.mass * 0.7));
+    // Slither.io: dead snakes drop ~70% of their body as food orbs
+    // along the body trail.
+    const drops = Math.min(400, Math.floor(p.sct * 0.7));
     const bodyLen = p.points.length;
-    for (let i = 0; i < drops; i++) {
-      // Sample body points evenly across length (not random) for a clean trail
+    for (let i = 0; i < drops && bodyLen > 0; i++) {
       const idx = Math.floor((i / drops) * bodyLen) % bodyLen;
       const pt = p.points[idx];
       if (pt) this.food.push({ x: pt.x + rand(-12, 12), y: pt.y + rand(-12, 12) });
@@ -361,101 +381,99 @@ class Room {
       this.powerups.push({ x: pos.x, y: pos.y, type });
     }
 
-    /* 2. Move every alive snake. */
+    /* 2. Move every alive snake — SLITHER.IO physics. */
     for (const p of this.players.values()) {
       if (!p.alive) continue;
 
       // Expire power-ups
       p.powerups = p.powerups.filter(pu => now < pu.until);
 
+      // ===== TURN RATE (slither.io exact formula) =====
+      //   sc    = thickness factor from body part count
+      //   scang = 0.13 + 0.87 * ((7-sc)/6)^2   quadratic falloff
+      //   omega = MAMU * scang  (rad per tick)
+      const sc = this.getSC(p);
+      const scang = this.getScang(sc);
+      const turnRate = TURN_PER_TICK * scang * this.settings.snakeSpeed;
       const d = angleDelta(p.heading, p.targetAngle);
-      // Slither.io scaling — sc derived from MASS via sqrt.
-      // Previous 0.35 multiplier capped sc at mass ~250, making
-      // everything 250+ turn at slither's MAX slow rate (impossible).
-      // Real slither caps at score ~411 (sc 4.86), and most players
-      // don't get there. New 0.20 ramp = gradual feel:
-      //   sc = min(6, 1 + sqrt(mass) * 0.20)
-      // Results:
-      //   mass 14   → sc 1.75 → 348°/s (snappy starter)
-      //   mass 100  → sc 3.00 → 230°/s (responsive)
-      //   mass 270  → sc 4.29 → 134°/s (heavy but still turning)
-      //   mass 500  → sc 5.47 → 84°/s  (slow, like slither big)
-      //   mass 750+ → sc 6.00 → 58°/s  (max slow, very rare)
-      const sc = Math.min(6, 1 + Math.sqrt(p.mass) * 0.20);
-      const scang = 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
-      const turnRate = 0.26 * scang;
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
 
-      // Slither.io: bigger snakes are slightly faster (sc-scaled).
-      // Makes turn radius proportionally bigger than body width, so
-      // the head orbits outside the coil — that signature look.
-      const sizeBoost = 1 + (sc - 1) * 0.08;
-      let targetSpeed = BASE_SPEED * this.settings.snakeSpeed * sizeBoost;
-      if (p.boost && p.mass > BOOST_MIN_MASS) {
-        targetSpeed = BOOST_SPEED * this.settings.boostSpeed;
-        // Slither.io: constant drain (no compounding) — ~1% mass/sec.
-        // At 30 ticks/sec, that's ~0.0003 fraction per tick.
+      // ===== SPEED (slither.io: ssp = 5.39 + 0.4*sc) =====
+      let targetSpeed = this.getSpeed(p) * this.settings.snakeSpeed;
+      const isBoosting = p.boost && p.sct > BOOST_MIN_SCT;
+      if (isBoosting) {
+        targetSpeed += BOOST_DELTA * this.settings.boostSpeed;
+        // Slither: ~1% mass per second drain. At 30Hz: 0.000333/tick.
         if (!this.hasPowerup(p, "boostme")) {
-          p.mass -= Math.max(0.04, p.mass * 0.0035);
-          // Drop trailing food orbs while boosting (slither.io drop trail)
+          p.mass -= 0.033;
+          // Boost drops food trail
           if (Math.random() < 0.18) {
             const tail = p.points[p.points.length - 1];
             if (tail) this.food.push({ x: tail.x, y: tail.y });
           }
         }
       }
-
-      // Smooth speed ramping (lerp toward target)
-      p._curSpeed += (targetSpeed - p._curSpeed) * 0.25;
+      p._curSpeed += (targetSpeed - p._curSpeed) * 0.4;
       const speed = p._curSpeed;
 
-      // ===== HEAD: move smoothly forward, unshift new body points =====
-      // Use the queue-based approach (body = head's past positions
-      // sampled at POINT_STEP intervals). This makes the body TRACE
-      // the head's exact path — always smooth, no weird kinks during
-      // sharp turns. The spiral-tightening effect comes from the head
-      // itself spiraling inward (numerical integration of constant
-      // turn rate produces a slight inward spiral per tick).
+      // ===== HEAD: move forward at current heading =====
       const head = p.points[0];
-      const nx = head.x + Math.cos(p.heading) * speed;
-      const ny = head.y + Math.sin(p.heading) * speed;
+      p.points[0] = {
+        x: head.x + Math.cos(p.heading) * speed,
+        y: head.y + Math.sin(p.heading) * speed,
+      };
 
-      p._stepAcc += speed;
-      if (p._stepAcc >= POINT_STEP) {
-        p._stepAcc = 0;
-        p.points.unshift({ x: nx, y: ny });
-      } else {
-        p.points[0] = { x: nx, y: ny };
-      }
-
-      // ===== TAIL: smooth display-length lerp + sub-pixel trim =====
-      const targetL = this.targetLen(p);
-      if (p._displayLen == null) p._displayLen = targetL;
-      p._displayLen += (targetL - p._displayLen) * 0.08;
-      const want = p._displayLen;
-
-      // Walk the body from head to find where target length ends.
-      // Replace that segment with sub-pixel interpolation so the
-      // tail slides smoothly instead of snapping between points.
-      let acc = 0;
-      let trimAt = p.points.length;
+      // ===== BODY: rigid chain — each segment at wsep behind ahead =====
+      // Slither.io exact algorithm. Each segment is pulled to exactly
+      // wsep units behind the segment ahead, along the chord.
+      // During boost, segments only catch up at CST rate (tail stretches).
+      const wsep = this.getWsep(p);
+      const catchup = isBoosting ? CST : 1.0;
       for (let i = 1; i < p.points.length; i++) {
-        const seg = Math.hypot(
-          p.points[i].x - p.points[i-1].x,
-          p.points[i].y - p.points[i-1].y
-        );
-        if (acc + seg >= want) {
-          const t = seg > 0 ? Math.max(0, Math.min(1, (want - acc) / seg)) : 0;
+        const ahead = p.points[i - 1];
+        const curr = p.points[i];
+        const dx = ahead.x - curr.x;
+        const dy = ahead.y - curr.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > wsep) {
+          // Excess gap — pull segment forward along chord by `excess * catchup`
+          const excess = (dist - wsep) * catchup;
           p.points[i] = {
-            x: p.points[i-1].x + (p.points[i].x - p.points[i-1].x) * t,
-            y: p.points[i-1].y + (p.points[i].y - p.points[i-1].y) * t,
+            x: curr.x + (dx / dist) * excess,
+            y: curr.y + (dy / dist) * excess,
           };
-          trimAt = i + 1;
-          break;
         }
-        acc += seg;
+        // If dist <= wsep, segment stays (rigid chain doesn't push apart)
       }
-      if (trimAt < p.points.length) p.points.length = trimAt;
+
+      // ===== GROWTH: add tail segment when fam fills =====
+      // Slither: mass increase accumulates 'fam' fullness. When fam >= 1,
+      // sct += 1 and a new tail segment is extruded.
+      // We use mass directly as fractional sct. When mass > sct, grow.
+      while (p.mass >= p.sct + 1 && p.points.length >= 2) {
+        p.sct++;
+        const last = p.points[p.points.length - 1];
+        const prev = p.points[p.points.length - 2];
+        const tdx = last.x - prev.x;
+        const tdy = last.y - prev.y;
+        const td = Math.hypot(tdx, tdy);
+        if (td > 0.01) {
+          p.points.push({
+            x: last.x + (tdx / td) * wsep,
+            y: last.y + (tdy / td) * wsep,
+          });
+        } else {
+          p.points.push({
+            x: last.x - Math.cos(p.heading) * wsep,
+            y: last.y - Math.sin(p.heading) * wsep,
+          });
+        }
+      }
+      // ===== SHRINK: remove tail when mass drops below sct =====
+      while (p.mass < p.sct && p.sct > 2 && p.points.length > 2) {
+        p.sct--;
+        p.points.pop();
+      }
     }
 
     /* 3. Eating + Magnet + Power-up pickup */
@@ -481,7 +499,7 @@ class Room {
       for (let i = this.food.length - 1; i >= 0; i--) {
         const f = this.food[i];
         if (dist2(h.x, h.y, f.x, f.y) < er2) {
-          p.mass += FOOD_MASS;
+          p.mass += FOOD_VAL;
           this.food[i] = this.food[this.food.length - 1];
           this.food.pop();
         }
@@ -493,7 +511,7 @@ class Room {
         if (dist2(h.x, h.y, pu.x, pu.y) < 900) { // ~30px radius
           const duration = pu.type === "invincible" ? 10000 : 15000;
           p.powerups.push({ type: pu.type, until: now + duration });
-          if (pu.type === "jumbo") p.mass *= 4;
+          if (pu.type === "jumbo") p.mass += 50; // adds 50 segments
           this.powerups.splice(i, 1);
           this.send(p, { t: "powerup", type: pu.type });
         }
@@ -531,7 +549,7 @@ class Room {
       if (!p.alive) continue;
       const h = p.points[0];
 
-      // 4a. Border: DRAIN mass — accelerates the longer you stay outside
+      // 4a. Border: DRAIN segments — accelerates the longer you stay outside
       const distFromCenter = Math.hypot(h.x - this.borderCenterX, h.y - this.borderCenterY);
       if (distFromCenter > this.borderR) {
         p._stormTicks++;
@@ -542,7 +560,7 @@ class Room {
             const tail = p.points[p.points.length - 1];
             if (tail) this.food.push({ x: tail.x, y: tail.y });
           }
-          if (p.mass <= 1) {
+          if (p.mass <= 2) {
             this.killSnake(p, "border");
             continue;
           }
@@ -619,8 +637,8 @@ class Room {
       snakes.push({
         id: p.id, n: p.name, c: p.color, pat: p.pattern,
         r: Math.round(this.snakeRadius(p)),
-        m: Math.round(p.mass), p: pts,
-        b: p.boost && p.mass > BOOST_MIN_MASS ? 1 : 0,
+        m: p.sct, p: pts,
+        b: p.boost && p.sct > BOOST_MIN_SCT ? 1 : 0,
         pu: p.powerups.map(x => x.type),
       });
     }
