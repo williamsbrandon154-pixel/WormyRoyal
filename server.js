@@ -465,33 +465,38 @@ class Room {
       else if (p.mass < p.sct && p.sct > 2) p.sct--;
 
       // ===== SAMPLE body segments from head path at wsep arc length =====
-      // Slither.io exact: walk the dense head path, accumulating distance,
-      // place a body segment each time cumulative distance crosses wsep.
-      // This makes the body smoothly trace the head's actual curved path.
+      // Slither.io exact: walk the dense head path, accumulating arc length,
+      // place a body segment each time we cover wsep more distance.
+      // We use a "walker" position (continuous, not bound to path indices)
+      // so we can place segments at exact wsep without corrupting the path.
       p.points = [{ x: nx, y: ny }]; // head
+      let walkerX = nx, walkerY = ny;
       let pathIdx = 0;
-      let acc = 0;
+
       while (p.points.length < p.sct && pathIdx + 1 < p._headPath.length) {
-        const a = p._headPath[pathIdx];
-        const b = p._headPath[pathIdx + 1];
-        const segDist = Math.hypot(b.x - a.x, b.y - a.y);
-        if (acc + segDist >= wsep) {
-          // Place segment at exact wsep along this path segment
-          const t = (wsep - acc) / segDist;
-          p.points.push({
-            x: a.x + (b.x - a.x) * t,
-            y: a.y + (b.y - a.y) * t,
-          });
-          // Continue from this point — update path with placed position
-          // so subsequent segments measure from here
-          p._headPath[pathIdx] = p.points[p.points.length - 1];
-          acc = 0;
-          // Don't advance pathIdx — there might be more wsep boundaries
-          // within this segment if segDist was large (rare but possible).
-        } else {
-          acc += segDist;
-          pathIdx++;
+        // Advance walker by wsep along the path
+        let needToWalk = wsep;
+        while (needToWalk > 0 && pathIdx + 1 < p._headPath.length) {
+          const b = p._headPath[pathIdx + 1];
+          const dx = b.x - walkerX;
+          const dy = b.y - walkerY;
+          const segDist = Math.hypot(dx, dy);
+          if (segDist >= needToWalk) {
+            // Walker advances within current segment
+            const t = needToWalk / segDist;
+            walkerX += dx * t;
+            walkerY += dy * t;
+            needToWalk = 0;
+          } else {
+            // Walker reaches next path entry, advance to it
+            walkerX = b.x;
+            walkerY = b.y;
+            needToWalk -= segDist;
+            pathIdx++;
+          }
         }
+        // Place body segment at walker's current position
+        p.points.push({ x: walkerX, y: walkerY });
       }
     }
 
