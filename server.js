@@ -818,11 +818,12 @@ wss.on("connection", (ws, req) => {
         const code = "TEST" + Math.random().toString(36).substring(2, 5).toUpperCase();
         room = new Room(code);
         room.isTestMode = true;
-        // Sensible defaults for solo roaming
-        room.settings.mapSize = 1800;
+        // Big map for testing — slither.io's world is huge relative to snake.
+        // Even a maxed snake (score 500+) fits comfortably here.
+        room.settings.mapSize = 4500;
         room.settings.snakeSpeed = 1.0;
         room.settings.boostSpeed = 1.5;
-        room.settings.borderSpeed = 0.25;  // very slow border in test
+        room.settings.borderSpeed = 0.2;   // very slow border in test
         room.settings.foodRate = 1.5;      // extra food for testing growth
         room.settings.maxPlayers = 1;
         rooms.set(code, room);
