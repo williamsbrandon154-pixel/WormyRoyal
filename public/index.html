@@ -470,102 +470,102 @@ addEventListener("keydown",e=>{
 // Snapshot buffer for smooth interpolation
 const snapBuf=[];
 const SNAP_MAX=12;
-// Latest snapshot, no buffer — ring buffer handles smoothing
-const RENDER_DELAY=0;
+// One snapshot-period of jitter buffer (30 Hz broadcast = 33 ms cushion).
+// Just enough to let bracket-interp keep the head smooth.
+const RENDER_DELAY=33;
 
-// === SLITHER.IO cosine ring buffer — kernel tuned for our 30 Hz network ===
-// Slither.io's actual source uses hfc=53 at 60 Hz physics+network for a ~430 ms
-// effective render lag. At our 30 Hz broadcasts that kernel becomes molasses.
-// HFC=8 (~133 ms kernel, ~67 ms effective lag) preserves slither's cosine
-// curve while feeling responsive to mouse input.
-//   Per body point: fxs[HFC]/fys[HFC] ring buffer.
-//   On position change (dx,dy): for j in 0..HFC, fxs[(fpos+j)%HFC] -= dx * hfas[j]
-//   Per render frame: fx = fxs[fpos]; fxs[fpos]=0; fpos=(fpos+1)%HFC; ftg--
-//   Rendered position = point.xx + fx
-const HFC = 8;
-const hfas = new Float32Array(HFC);
-for (let i = 0; i < HFC; i++) {
-  hfas[i] = 0.5 * (1 - Math.cos(Math.PI * (HFC - 1 - i) / (HFC - 1)));
-}
-// snake_id → { perPoint:[{fxs,fys,lastX,lastY,fx,fy}], fpos, ftg }
-const snakeBuffers = new Map();
-// snake_id → last snapshot timestamp processed (so we apply delta only on new snapshots)
-const snakeLastSnap = new Map();
+// === SLITHER.IO architecture — head sparse, body computed locally =====
+// Slither's source proves the body is NOT shipped over the network — only
+// head position + scalars. Each client runs chain relaxation locally so
+// body motion is computed every render frame at 60 Hz, not at 30 Hz
+// broadcast rate. That's why slither feels buttery — the per-segment
+// motion is continuous, not lerped between sparse snapshots.
+//
+// We still receive the full body from the server (for now), but we use it
+// only to initialize a snake's local body the first time we see it. After
+// that, the local body follows the interpolated head via slither's exact
+// chain-relaxation algorithm (CST=0.43 ramp, push every wsep distance).
+//
+// id → { pts:[{x,y}], _stepAcc, _initialized }
+const localBodies = new Map();
 
-// On a new snapshot, compute per-body-point delta and write -dx*hfas[j]
-// into the ring across 53 future render frames. Matches slither.io exactly.
-function applyToRing(snakeId, snapshotTime, points){
-  const lastTime = snakeLastSnap.get(snakeId);
-  if (lastTime === snapshotTime) return;
-  snakeLastSnap.set(snakeId, snapshotTime);
+const CST = 0.43;       // slither's chain catch-up — applied once per push
+const WSEP_BASE = 6;    // slither's wsep = 6 * sc
 
-  const numPoints = points.length >> 1;
-  let buf = snakeBuffers.get(snakeId);
-  if (!buf){
-    buf = { perPoint: [], fpos: 0, ftg: 0 };
-    snakeBuffers.set(snakeId, buf);
+// sc = thickness factor; min 1 (tiny), max 6 (huge)
+function sc_of(sct){ return Math.min(6, 1 + (sct - 2) / 106); }
+
+// Initialize a snake's local body from the server's authoritative pts.
+// Called the first time we observe a snake, or when divergence is detected.
+function initLocalBody(snakeId, serverPts){
+  const pts = [];
+  for (let i = 0; i < serverPts.length; i += 2){
+    pts.push({ x: serverPts[i], y: serverPts[i+1] });
   }
-
-  // Body grew at head (server unshifts new points to index 0): insert new
-  // entries at the front of perPoint, initialized so they appear in place
-  // with no smoothing artifact.
-  const oldNum = buf.perPoint.length;
-  if (numPoints > oldNum){
-    const growBy = numPoints - oldNum;
-    const newEntries = [];
-    for (let g = 0; g < growBy; g++){
-      newEntries.push({
-        fxs: new Float32Array(HFC),
-        fys: new Float32Array(HFC),
-        lastX: points[g*2],
-        lastY: points[g*2+1],
-        fx: 0,
-        fy: 0,
-      });
-    }
-    buf.perPoint = newEntries.concat(buf.perPoint);
-  } else if (numPoints < oldNum){
-    // Body shrunk at tail — pop from end
-    buf.perPoint.length = numPoints;
-  }
-
-  // Write per-point deltas across the cosine ring (slither's exact loop).
-  for (let i = 0; i < numPoints; i++){
-    const pp = buf.perPoint[i];
-    const nx = points[i*2];
-    const ny = points[i*2+1];
-    const dx = nx - pp.lastX;
-    const dy = ny - pp.lastY;
-    pp.lastX = nx;
-    pp.lastY = ny;
-    if (dx === 0 && dy === 0) continue;
-
-    let k = buf.fpos;
-    for (let j = 0; j < HFC; j++){
-      pp.fxs[k] -= dx * hfas[j];
-      pp.fys[k] -= dy * hfas[j];
-      k++;
-      if (k >= HFC) k = 0;
-    }
-  }
-  buf.ftg = HFC;
+  localBodies.set(snakeId, {
+    pts,
+    _stepAcc: 0,
+    _initialized: true,
+  });
 }
 
-// Per render frame: read fxs[fpos]/fys[fpos] into pp.fx/pp.fy, clear that
-// slot, advance fpos, decrement ftg. Matches slither.io exactly.
-function advanceRing(snakeId){
-  const buf = snakeBuffers.get(snakeId);
-  if (!buf || buf.ftg <= 0) return;
-  for (let i = 0; i < buf.perPoint.length; i++){
-    const pp = buf.perPoint[i];
-    pp.fx = pp.fxs[buf.fpos];
-    pp.fy = pp.fys[buf.fpos];
-    pp.fxs[buf.fpos] = 0;
-    pp.fys[buf.fpos] = 0;
+// Move local head to (newHeadX, newHeadY), accumulate distance, and when
+// step-accumulator reaches wsep, push a new body segment and run chain
+// relaxation. Mirrors server.js body update exactly.
+function updateLocalBody(ls, newHeadX, newHeadY, sct){
+  const head = ls.pts[0];
+  if (!head){
+    ls.pts[0] = { x: newHeadX, y: newHeadY };
+    return;
   }
-  buf.fpos++;
-  if (buf.fpos >= HFC) buf.fpos = 0;
-  buf.ftg--;
+  const dx = newHeadX - head.x;
+  const dy = newHeadY - head.y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+
+  // Smoothly move head to new position (continuous motion every render frame)
+  ls.pts[0] = { x: newHeadX, y: newHeadY };
+
+  if (dist < 0.0001) return;
+
+  ls._stepAcc += dist;
+  const wsep = WSEP_BASE * sc_of(sct);
+
+  // While we've traveled at least one wsep, push a new segment and relax.
+  // Inside a tight loop in case dist crossed multiple wsep boundaries.
+  let safety = 0;
+  while (ls._stepAcc >= wsep && safety < 8){
+    safety++;
+    ls._stepAcc -= wsep;
+    // Unshift a copy of the new head — now pts[0] = head (keeps moving)
+    // and pts[1] is the new frozen body segment.
+    ls.pts.unshift({ x: newHeadX, y: newHeadY });
+
+    // Chain relaxation: each segment lerps toward predecessor.
+    // n<=4 → ramp factor; else full CST.
+    let n = 0;
+    for (let m = 3; m < ls.pts.length; m++){
+      n++;
+      const mv = n <= 4 ? CST * n / 4 : CST;
+      const ahead = ls.pts[m - 1];
+      const curr = ls.pts[m];
+      ls.pts[m] = {
+        x: curr.x + (ahead.x - curr.x) * mv,
+        y: curr.y + (ahead.y - curr.y) * mv,
+      };
+    }
+
+    // Trim tail to match server's sct (server may have shrunk via boost).
+    while (ls.pts.length > sct + 1){
+      ls.pts.pop();
+    }
+  }
+
+  // If the server says the body grew but we haven't pushed enough, the
+  // local body will catch up the next time a push fires. Conversely, if
+  // server's sct is less than our pts.length, we trim immediately.
+  while (ls.pts.length > sct + 1){
+    ls.pts.pop();
+  }
 }
 let camX=0,camY=0;
 const isTouch=matchMedia("(pointer:coarse)").matches;
@@ -1311,26 +1311,36 @@ function render(){
   if(fwParticles.length>0)renderFireworks();
 
   if(!bracket){ctx.fillStyle="#0a0f1a";ctx.fillRect(0,0,W,H);return}
-  const{next}=bracket; // body smoothing now lives in the cosine ring buffer
+  const{prev,next,t}=bracket;
+  const a=Math.max(0,Math.min(1,t));
 
-  // Apply slither's cosine ring smoothing for every snake first, so the
-  // camera target and the rendered head stay in sync (both use the same
-  // smoothed position).
+  // Bracket-interp each snake's head, then drive client-side chain
+  // relaxation off the interpolated head. The body is computed locally at
+  // 60 Hz — slither.io's architecture.
   for(const s of next.s){
-    applyToRing(s.id, next._t, s.p);
-    advanceRing(s.id);
+    const ps=findSn(prev,s.id);
+    let hx=s.p[0], hy=s.p[1];
+    if(ps && ps.p.length>=2){
+      hx=ps.p[0]+(s.p[0]-ps.p[0])*a;
+      hy=ps.p[1]+(s.p[1]-ps.p[1])*a;
+    }
+    let ls=localBodies.get(s.id);
+    if(!ls){
+      initLocalBody(s.id, s.p);
+      ls=localBodies.get(s.id);
+    }
+    updateLocalBody(ls, hx, hy, s.m);
   }
 
   // Camera + dynamic zoom (slither.io style: zoom out as you grow)
   let me=findSn(next,myId);
   if(!me&&next.s.length)me=next.s[0];
   if(me){
-    const meBuf=snakeBuffers.get(me.id);
-    const meHead=meBuf&&meBuf.perPoint[0];
-    const headFx=meHead?meHead.fx:0;
-    const headFy=meHead?meHead.fy:0;
-    const tx=me.p[0]+headFx;
-    const ty=me.p[1]+headFy;
+    // Camera follows the local head (matches what we render).
+    const meLs=localBodies.get(me.id);
+    const meHead=meLs&&meLs.pts[0];
+    const tx=meHead?meHead.x:me.p[0];
+    const ty=meHead?meHead.y:me.p[1];
     camX+=(tx-camX)*0.15;camY+=(ty-camY)*0.15;
 
     // Camera zoom out based on snake size — but more conservative than
@@ -1427,32 +1437,25 @@ function render(){
   ctx.strokeStyle=`rgba(255,200,210,${pulseA*0.4})`;
   ctx.lineWidth=1;ctx.stroke();
 
-  // Snakes — slither.io exact render smoothing.
-  // Ring buffers were already applied at the top of render() so camera
-  // and body stay in sync. Here we just read pp.fx/pp.fy per body point.
+  // Snakes — render from the locally-computed body (slither's architecture).
+  // The local body was already advanced at the top of render() so all we
+  // do here is project it to screen space.
   for(const s of next.s){
-    const buf = snakeBuffers.get(s.id);
-    const pts = [];
-    for(let i = 0; i < s.p.length; i += 2){
-      const pi = i >> 1;
-      const pp = buf ? buf.perPoint[pi] : null;
-      const fx = pp ? pp.fx : 0;
-      const fy = pp ? pp.fy : 0;
-      pts.push(w2s(s.p[i] + fx, s.p[i+1] + fy));
+    const ls=localBodies.get(s.id);
+    if(!ls||!ls.pts||ls.pts.length<2) continue;
+    const pts=[];
+    for(let i=0;i<ls.pts.length;i++){
+      pts.push(w2s(ls.pts[i].x, ls.pts[i].y));
     }
-
-    if(pts.length>1)drawSnake(s,pts,s.id===myId);
+    drawSnake(s,pts,s.id===myId);
   }
 
-  // GC ring-buffer state for snakes that died or left.
-  if (snakeBuffers.size > next.s.length){
+  // GC local-body state for snakes that died or left.
+  if (localBodies.size > next.s.length){
     const liveIds = new Set();
     for (const s of next.s) liveIds.add(s.id);
-    for (const id of [...snakeBuffers.keys()]){
-      if (!liveIds.has(id)){
-        snakeBuffers.delete(id);
-        snakeLastSnap.delete(id);
-      }
+    for (const id of [...localBodies.keys()]){
+      if (!liveIds.has(id)) localBodies.delete(id);
     }
   }
 
