@@ -22,7 +22,7 @@ const BASE_SPEED       = 5.0;             // px per 30Hz tick at sc=1
 const BOOST_DELTA      = 1.8;             // extra px/tick during boost (small, slither-ish)
 const START_SCT        = 8;               // body parts at spawn
 const BOOST_MIN_SCT    = 5;
-const WSEP_BASE        = 6;               // wsep = WSEP_BASE * sc — slither.io's exact value
+const WSEP_BASE        = 4;               // wsep = WSEP_BASE * sc — middle ground
 const BODY_R_BASE      = 5;               // body_r = BODY_R_BASE + 5 * sc
 const FOOD_TARGET      = 200;
 const FOOD_VAL         = 1;               // each food orb = 1 body part of growth
@@ -456,8 +456,30 @@ class Room {
       else if (p.mass < p.sct && p.sct > 2) p.sct--;
 
       // ===== TRIM body to sct points =====
-      // Body = head's past positions queue. Keep most recent sct points.
       if (p.points.length > p.sct) p.points.length = p.sct;
+
+      // ===== COIL-IN FORCE — body actively tightens curves =====
+      // Slither.io's signature: the body progressively coils INTO ITSELF
+      // when circling. Pure queue-based body just traces head's path, but
+      // slither has an additional force that pulls each body segment
+      // toward the midpoint of its neighbors. Over time, curves tighten,
+      // coils get denser. Body literally "coils into itself".
+      // We DON'T apply this to the head (index 0) or the first few segments
+      // (they're determined by head's current direction).
+      const COIL_STRENGTH = 0.04;
+      for (let i = 3; i < p.points.length - 1; i++) {
+        const a = p.points[i - 1];
+        const b = p.points[i];
+        const c = p.points[i + 1];
+        // Midpoint of neighbors — this is the chord, inside any curve
+        const mx = (a.x + c.x) * 0.5;
+        const my = (a.y + c.y) * 0.5;
+        // Pull segment toward chord midpoint by COIL_STRENGTH
+        p.points[i] = {
+          x: b.x + (mx - b.x) * COIL_STRENGTH,
+          y: b.y + (my - b.y) * COIL_STRENGTH,
+        };
+      }
     }
 
     /* 3. Eating + Magnet + Power-up pickup */
