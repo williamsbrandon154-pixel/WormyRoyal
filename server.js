@@ -6,29 +6,30 @@ const { WebSocketServer } = require("ws");
 const PORT = process.env.PORT || 8080;
 
 /* ----------------------------- Defaults ------------------------------ */
-const TICK_MS          = 33;
+const TICK_MS          = 16;              // 60Hz physics — closer to slither's 125Hz feel
 const COUNTDOWN_MS     = 5000;
 const POSTGAME_MS      = 9000;
 
 // ===== SLITHER.IO PHYSICS CONSTANTS (per reverse-engineered protocol) =====
-// Slither runs at 125Hz (8ms tick). We run at 30Hz, so all per-tick values
-// here are scaled to maintain the same per-second rates.
+// Slither runs at 125Hz (8ms tick). We run at 60Hz (16ms), so per-tick
+// values are scaled to maintain the same per-second rates as slither.
 //   MAMU  = 0.033 rad / 8ms = 4.125 rad/s  (base turn rate)
-//   SSP   = 5.39 + 0.4 * sc per 8ms        (slither speed in their units)
-//   WSEP  = 6 * sc                          (segment spacing)
-//   CST   = 0.43                            (tail catch-up ratio during boost)
-const TURN_PER_TICK    = 0.033 * (33/8);  // = 0.1375 rad/30Hz tick (slither's MAMU)
-const BASE_SPEED       = 5.0;             // px per 30Hz tick at sc=1
-// Slither: fsp ≈ 2.4 × ssp during boost. We use additive delta.
-// With BASE_SPEED=5 → boost total = 5 + 7 = 12 ≈ 2.4× base ✓
-const BOOST_DELTA      = 7.0;             // px/tick added during boost (matches slither's 2.4× ratio)
-const START_SCT        = 8;               // body parts at spawn
+//   SSP   = 5.39 + 0.4 * sc per 8ms         (speed scaling)
+//   WSEP  = 6 * sc                           (segment spacing)
+// All per-tick constants below = per-second value × (TICK_MS / 1000)
+const TURN_PER_TICK    = 0.033 * (16/8);  // = 0.066 rad/60Hz tick = 4.125 rad/s
+const BASE_SPEED       = 2.5;             // px per 60Hz tick at sc=1 = 150 px/s
+// Slither boost ≈ 2.4× base. Base 2.5 → boost total 6 (delta +3.5)
+const BOOST_DELTA      = 3.5;             // px/tick added during boost
+const START_SCT        = 8;
 const BOOST_MIN_SCT    = 5;
 const WSEP_BASE        = 6;               // wsep = WSEP_BASE * sc — slither.io exact value
-const BODY_R_BASE      = 5;               // body_r = BODY_R_BASE + 5 * sc
+const BODY_R_BASE      = 5;
 const FOOD_TARGET      = 200;
-const FOOD_VAL         = 1;               // each food orb = 1 body part of growth
-const BORDER_DRAIN     = 0.6;             // body parts lost per tick in storm (custom, not slither)
+const FOOD_VAL         = 1;
+const BORDER_DRAIN     = 0.3;             // body parts lost per tick in storm (halved for 60Hz)
+// Broadcast every 2nd tick → 30Hz network rate (same bandwidth as before)
+const BROADCAST_EVERY  = 2;
 
 const COLORS = [
   "#37e6c9", "#ff5da2", "#ffd23f", "#7c5cff",
@@ -398,7 +399,7 @@ class Room {
 
     /* 1b. Spawn power-ups periodically */
     this.powerupTimer++;
-    if (this.powerupTimer >= 300 && this.powerups.length < 5) { // every ~10 seconds
+    if (this.powerupTimer >= 600 && this.powerups.length < 5) { // every ~10 sec (60Hz × 10)
       this.powerupTimer = 0;
       const types = ["jumbo", "magnet", "boostme", "invincible"];
       const type = types[Math.floor(Math.random() * types.length)];
@@ -429,17 +430,17 @@ class Room {
       const isBoosting = p.boost && p.sct > BOOST_MIN_SCT;
       if (isBoosting) {
         targetSpeed += BOOST_DELTA * this.settings.boostSpeed;
-        // Slither: ~1% mass per second drain. At 30Hz: 0.000333/tick.
+        // Slither: ~1% mass per second drain. At 60Hz: 0.0167/tick.
         if (!this.hasPowerup(p, "boostme")) {
-          p.mass -= 0.033;
-          // Boost drops food trail
-          if (Math.random() < 0.18) {
+          p.mass -= 0.0167;
+          // Boost drops food trail (halved chance for 60Hz to keep same rate)
+          if (Math.random() < 0.09) {
             const tail = p.points[p.points.length - 1];
             if (tail) this.food.push({ x: tail.x, y: tail.y });
           }
         }
       }
-      p._curSpeed += (targetSpeed - p._curSpeed) * 0.4;
+      p._curSpeed += (targetSpeed - p._curSpeed) * 0.22;
       const speed = p._curSpeed;
 
       // ===== HEAD + BODY: slither.io EXACT algorithm =====
@@ -454,14 +455,13 @@ class Room {
       const nx = head.x + Math.cos(p.heading) * speed;
       const ny = head.y + Math.sin(p.heading) * speed;
 
-      // Save current head position to the path (dense — every tick)
+      // Save current head position to the path (dense — every physics tick)
       if (!p._headPath) p._headPath = [];
       p._headPath.unshift({ x: nx, y: ny });
-      // Cap path length. Need enough entries to cover full body arc length:
-      //   total arc = sct * wsep, path entries are speed px apart
-      //   so entries needed = sct * wsep / speed
-      //   With sc maxing at 6: ratio ~6 is plenty.
-      const maxPath = Math.max(100, p.sct * 6);
+      // Cap path length. At 60Hz with smaller speed per tick, we need more
+      // entries to cover the same arc length. Formula: sct * wsep / speed.
+      // Worst case sc=6: wsep=36, speed≈3.6, entries ≈ sct*10. Pad to 12.
+      const maxPath = Math.max(200, p.sct * 12);
       if (p._headPath.length > maxPath) p._headPath.length = maxPath;
 
       // ===== GROW/SHRINK: bring sct closer to mass, 1/tick =====
@@ -582,7 +582,7 @@ class Room {
       if (distFromCenter > this.borderR) {
         p._stormTicks++;
         if (!this.hasPowerup(p, "invincible")) {
-          const rampUp = 1 + p._stormTicks * 0.08;
+          const rampUp = 1 + p._stormTicks * 0.04; // halved for 60Hz
           p.mass -= BORDER_DRAIN * rampUp;
           if (Math.random() < 0.15) {
             const tail = p.points[p.points.length - 1];
@@ -627,8 +627,12 @@ class Room {
       }
     }
 
-    /* 5. Broadcast state */
-    this.broadcastState();
+    /* 5. Broadcast state — only every BROADCAST_EVERY tick (30Hz over 60Hz physics) */
+    if (!this._physicsTickN) this._physicsTickN = 0;
+    this._physicsTickN++;
+    if (this._physicsTickN % BROADCAST_EVERY === 0) {
+      this.broadcastState();
+    }
   }
 
   /* ---- networking ---- */
