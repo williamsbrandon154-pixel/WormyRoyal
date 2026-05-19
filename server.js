@@ -175,11 +175,11 @@ class Room {
   hasPowerup(p, type) { return p.powerups.some(pu => pu.type === type); }
 
   snakeRadius(p) {
-    // Slither.io style: slim snakes so the body width is well under the
-    // turn radius — this makes coils show distinct loops with a visible
-    // hole, not a solid donut. Max radius ~16 at infinite mass.
-    //   mass 14→8, mass 100→11.6, mass 400→14.3, mass 1000→15.3
-    let r = SNAKE_BASE_R + 10 * (1 - 1 / (1 + p.mass / 80));
+    // Slither.io style with more aggressive thickness so snakes feel
+    // substantial at mid-game (matching slither.io's visual proportions).
+    // Max radius ~20 at infinite mass.
+    //   mass 14→7.5, mass 100→13, mass 200→15.3, mass 500→17.7, mass 1000→18.7
+    let r = SNAKE_BASE_R + 14 * (1 - 1 / (1 + p.mass / 100));
     if (this.hasPowerup(p, "jumbo")) r *= 1.8;
     return r;
   }
@@ -369,29 +369,28 @@ class Room {
       p.powerups = p.powerups.filter(pu => now < pu.until);
 
       const d = angleDelta(p.heading, p.targetAngle);
-      // Slither.io scaling (reverse-engineered):
-      //   sc    = min(6, 1 + (sct - 2) / 106)   // thickness factor
-      //   scang = 0.13 + 0.87 * ((7-sc)/6)^2    // turn scaler
-      //   ssp   = 5.39 + 0.4 * sc               // speed scaler
-      // Turn base 0.26 + slimmer snake bodies ensures turn radius is
-      // comfortably > body diameter at every size — coils show as
-      // distinct loops with a visible center hole, not solid donuts.
-      //   mass 14   → 0.231 rad/tick (~396°/s — very snappy)
-      //   mass 100  → 0.196 rad/tick (~337°/s)
-      //   mass 400  → 0.150 rad/tick (~258°/s)
-      //   mass 1000 → 0.106 rad/tick (~182°/s)
-      //   mass 3000 → 0.049 rad/tick (~85°/s — wide arcs)
-      const sct = p.points.length;
-      const sc = Math.min(6, 1 + (sct - 2) / 106);
+      // Slither.io scaling, but sc derived from MASS directly (not body
+      // point count). Our body uses sqrt(mass) length scaling so we'd
+      // never reach sc=6 if we used slither's body-count formula.
+      // Map mass → sc via sqrt so big snakes (mass 200+) hit the cap
+      // and turn at slither's heaviest rate.
+      //   sc = min(6, 1 + sqrt(mass) * 0.35)
+      // Results:
+      //   mass 14   → sc 2.31 → 296°/s (snappy starter)
+      //   mass 50   → sc 3.47 → 195°/s (responsive)
+      //   mass 100  → sc 4.50 → 126°/s (heavier)
+      //   mass 200  → sc 5.95 → 71°/s  (slow, big-snake feel)
+      //   mass 270  → sc 6.00 → 58°/s  (committed turns only)
+      //   mass 500+ → sc 6.00 → 58°/s  (capped — slither big-snake)
+      const sc = Math.min(6, 1 + Math.sqrt(p.mass) * 0.35);
       const scang = 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
       const turnRate = 0.26 * scang;
       p.heading += Math.max(-turnRate, Math.min(turnRate, d));
 
       // Slither.io: bigger snakes are slightly faster (sc-scaled).
-      // This makes their turn RADIUS bigger relative to body width,
-      // so the head physically orbits outside its own coil — the
-      // signature "head sticks out" look.
-      const sizeBoost = 1 + (sc - 1) * 0.1;
+      // Makes turn radius proportionally bigger than body width, so
+      // the head orbits outside the coil — that signature look.
+      const sizeBoost = 1 + (sc - 1) * 0.08;
       let targetSpeed = BASE_SPEED * this.settings.snakeSpeed * sizeBoost;
       if (p.boost && p.mass > BOOST_MIN_MASS) {
         targetSpeed = BOOST_SPEED * this.settings.boostSpeed;
