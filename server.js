@@ -99,7 +99,7 @@ class Room {
     const isHost = this.isPublic ? false : this.players.size === 0;
     // Validate color: must be a valid hex color
     const validColor = /^#[0-9a-fA-F]{6}$/.test(color) ? color : COLORS[(id - 1) % COLORS.length];
-    const validPattern = ["solid","striped","gradient"].includes(pattern) ? pattern : "solid";
+    const validPattern = ["solid","striped","gradient","rings"].includes(pattern) ? pattern : "solid";
     const p = {
       id, ws, name: (name || "snake").slice(0, 14), isHost,
       color: validColor, pattern: validPattern,

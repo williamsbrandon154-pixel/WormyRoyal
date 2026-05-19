@@ -210,7 +210,25 @@ let ws,myId=null,iAmHost=false,amAlive=false,isTestMode=false;
 
 // ===== CUSTOMIZE SCREEN =====
 const PICK_COLORS=["#37e6c9","#ff5da2","#ffd23f","#7c5cff","#4ad66d","#ff7849","#43c6ff","#ff4d6d","#f72585","#80ed99","#ffbe0b","#c77dff"];
-const PATTERNS=["solid","striped","gradient"];
+const PATTERNS=["solid","striped","gradient","rings"];
+// Slither.io's signature two-color skins. Each primary pairs with a vivid
+// secondary so stripes/gradients pop instead of looking like brightness
+// variations of the base color. Yellow is the most common slither pair.
+const COLOR_PAIRS={
+  "#37e6c9":"#fffacd",  // teal + cream
+  "#ff5da2":"#ffe0b3",  // pink + peach
+  "#ffd23f":"#ff5da2",  // yellow + pink (classic)
+  "#7c5cff":"#ffd23f",  // purple + yellow
+  "#4ad66d":"#ffd23f",  // green + yellow
+  "#ff7849":"#ffd23f",  // orange + yellow
+  "#43c6ff":"#ffd23f",  // cyan + yellow
+  "#ff4d6d":"#ffd23f",  // red + yellow (classic)
+  "#f72585":"#fffacd",  // magenta + cream
+  "#80ed99":"#ff5da2",  // mint + pink
+  "#ffbe0b":"#ff5da2",  // amber + pink
+  "#c77dff":"#ffd23f",  // lilac + yellow
+};
+function secondaryColor(hex){ return COLOR_PAIRS[hex] || "#fffacd"; }
 let chosenColor=PICK_COLORS[0];
 let chosenPattern="solid";
 let previewAnim=null;
@@ -278,7 +296,7 @@ function drawSnakePreview(){
   prevCtx.strokeStyle=`rgb(${cr*.12|0},${cg*.12|0},${cb*.12|0})`;
   prevCtx.stroke();
 
-  const litCol=`rgb(${Math.min(255,cr*1.3)|0},${Math.min(255,cg*1.3)|0},${Math.min(255,cb*1.3)|0})`;
+  const secCol=secondaryColor(col);
   function tracePreview(){
     prevCtx.beginPath();
     prevCtx.moveTo(pts[0][0],pts[0][1]);
@@ -294,9 +312,10 @@ function drawSnakePreview(){
   prevCtx.strokeStyle=col;
   prevCtx.stroke();
 
-  // Color rings (smooth alternating bands like slither.io)
-  if(chosenPattern==="striped"||chosenPattern==="gradient"){
-    const bandSize=chosenPattern==="gradient"?5:4;
+  // Color stripes/rings — true two-color slither bands
+  if(chosenPattern==="striped"||chosenPattern==="gradient"||chosenPattern==="rings"){
+    const bandSize=chosenPattern==="gradient"?5:chosenPattern==="rings"?2:4;
+    const stepSize=chosenPattern==="rings"?4:bandSize;
     let i=0,bandIdx=0;
     while(i<pts.length-1){
       const end=Math.min(i+bandSize,pts.length-1);
@@ -308,10 +327,10 @@ function drawSnakePreview(){
           prevCtx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
         }
         prevCtx.lineWidth=r*2;
-        prevCtx.strokeStyle=litCol;
+        prevCtx.strokeStyle=secCol;
         prevCtx.stroke();
       }
-      i=end;bandIdx++;
+      i+=stepSize;bandIdx++;
     }
   }
 
@@ -326,22 +345,22 @@ function drawSnakePreview(){
   prevCtx.strokeStyle="rgba(255,255,255,0.35)";
   prevCtx.stroke();
 
-  // Eyes — slither.io style
+  // Eyes — slither.io style (matches in-game proportions)
   const dir=Math.atan2(pts[0][1]-pts[2][1],pts[0][0]-pts[2][0]);
-  const eyeR=r*.42;
-  for(const off of[-.55,.55]){
-    const ex=pts[0][0]+Math.cos(dir+off)*r*.58;
-    const ey=pts[0][1]+Math.sin(dir+off)*r*.58;
-    prevCtx.beginPath();prevCtx.arc(ex,ey,eyeR+1,0,Math.PI*2);
-    prevCtx.fillStyle="rgba(0,0,0,0.25)";prevCtx.fill();
+  const eyeR=r*.48;
+  for(const off of[-.58,.58]){
+    const ex=pts[0][0]+Math.cos(dir+off)*r*.62;
+    const ey=pts[0][1]+Math.sin(dir+off)*r*.62;
+    prevCtx.beginPath();prevCtx.arc(ex,ey,eyeR+1.5,0,Math.PI*2);
+    prevCtx.fillStyle="rgba(0,0,0,0.35)";prevCtx.fill();
     prevCtx.beginPath();prevCtx.arc(ex,ey,eyeR,0,Math.PI*2);
     prevCtx.fillStyle="#fff";prevCtx.fill();
-    const pupilOff=eyeR*0.45;
+    const pupilOff=eyeR*0.42;
     const ppx=ex+Math.cos(dir)*pupilOff,ppy=ey+Math.sin(dir)*pupilOff;
-    prevCtx.beginPath();prevCtx.arc(ppx,ppy,eyeR*.55,0,Math.PI*2);
+    prevCtx.beginPath();prevCtx.arc(ppx,ppy,eyeR*.52,0,Math.PI*2);
     prevCtx.fillStyle="#111";prevCtx.fill();
-    prevCtx.beginPath();prevCtx.arc(ppx-eyeR*0.15,ppy-eyeR*0.15,eyeR*0.18,0,Math.PI*2);
-    prevCtx.fillStyle="rgba(255,255,255,0.85)";prevCtx.fill();
+    prevCtx.beginPath();prevCtx.arc(ppx-eyeR*0.18,ppy-eyeR*0.18,eyeR*0.22,0,Math.PI*2);
+    prevCtx.fillStyle="rgba(255,255,255,0.9)";prevCtx.fill();
   }
 }
 
@@ -1108,7 +1127,9 @@ function drawSnake(s,pts,isMe){
   const len=pts.length;
   const isBoosting=!!s.b;
   const pat=s.pat||"solid";
-  const litCol=`rgb(${Math.min(255,cr*1.3)|0},${Math.min(255,cg*1.3)|0},${Math.min(255,cb*1.3)|0})`;
+  // Slither's signature paired secondary — paints distinct stripes,
+  // not just a brightness variation of the primary.
+  const secCol=secondaryColor(col);
 
   // Split: head portion (first 6 pts) drawn last = always on top
   const headLen=Math.min(6,len-1);
@@ -1122,8 +1143,19 @@ function drawSnake(s,pts,isMe){
       ctx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
     }
   }
-  // Body = FULL continuous path (no seam). Head will draw on top.
-  function traceBody(){ tracePath(); }
+  // Trace a sub-range [start..end] of the body — used for stripes
+  // and the tapering tail tip.
+  function traceRange(start,end){
+    if(end<=start)return false;
+    ctx.beginPath();
+    ctx.moveTo(pts[start][0],pts[start][1]);
+    for(let j=start;j<end;j++){
+      const mx=(pts[j][0]+pts[j+1][0])/2;
+      const my=(pts[j][1]+pts[j+1][1])/2;
+      ctx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
+    }
+    return true;
+  }
   // Head extends a few points PAST headLen so it cleanly covers
   // the body underneath when coiling — no visible junction.
   function traceHead(){
@@ -1138,9 +1170,11 @@ function drawSnake(s,pts,isMe){
   }
 
   ctx.lineCap="round";ctx.lineJoin="round";
+  // Outline = darker base color, slightly thicker than the fill so it
+  // peeks out around the edges. Slither uses a thin dark rim.
   const outlineCol=`rgb(${cr*.35|0},${cg*.35|0},${cb*.35|0})`;
 
-  // BOOST GLOW
+  // BOOST GLOW — pulsing outer glow when boosting
   if(isBoosting){
     tracePath();
     ctx.lineWidth=baseR*4;ctx.strokeStyle=col+"44";ctx.stroke();
@@ -1155,16 +1189,19 @@ function drawSnake(s,pts,isMe){
     ctx.lineWidth=baseR*2+12;ctx.strokeStyle=`rgba(255,215,0,${flk})`;ctx.stroke();
   }
 
-  // ====== UNIFIED SNAKE BODY (no internal seams) ======
-  // The whole snake is rendered as one continuous stroke chain.
-  // For the "head on top during coil" effect, we re-stroke the
-  // FILL ONLY (no outline) over the head region — covering any
-  // older body section the head overlaps. No terminal cap is
-  // visible because the head fill matches the body fill width.
+  // SUBTLE OUTER GLOW — slither's signature soft halo, very faint.
+  // Only when not boosting (boost has its own bigger glow).
+  if(!isBoosting){
+    tracePath();
+    ctx.lineWidth=baseR*2+8;
+    ctx.strokeStyle=col+"22";
+    ctx.stroke();
+  }
 
+  // ====== UNIFIED SNAKE BODY (no internal seams) ======
   // Full body outline (dark edge — runs from head to tail)
   tracePath();
-  ctx.lineWidth=baseR*2+4;
+  ctx.lineWidth=baseR*2+3;
   ctx.strokeStyle=outlineCol;
   ctx.stroke();
   // Full body fill (solid base color)
@@ -1172,26 +1209,26 @@ function drawSnake(s,pts,isMe){
   ctx.lineWidth=baseR*2;
   ctx.strokeStyle=col;
   ctx.stroke();
-  // Color rings (full length, head will overlay its region)
-  if(pat==="striped"||pat==="gradient"){
-    const bandSize=pat==="gradient"?5:4;
+
+  // Color stripes/rings — paint the secondary color over selected bands.
+  // "striped" = thick bands. "gradient" = wider/softer. "rings" = thin.
+  if(pat==="striped"||pat==="gradient"||pat==="rings"){
+    const bandSize=pat==="gradient"?5:pat==="rings"?2:4;
+    const stepSize=pat==="rings"?4:bandSize;
     let i=0,bandIdx=0;
     while(i<len-1){
       const end=Math.min(i+bandSize,len-1);
       if(bandIdx%2===1){
-        ctx.beginPath();
-        ctx.moveTo(pts[i][0],pts[i][1]);
-        for(let j=i;j<end;j++){
-          const mx=(pts[j][0]+pts[j+1][0])/2,my=(pts[j][1]+pts[j+1][1])/2;
-          ctx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
+        if(traceRange(i,end)){
+          ctx.lineWidth=baseR*2;
+          ctx.strokeStyle=secCol;
+          ctx.stroke();
         }
-        ctx.lineWidth=baseR*2;
-        ctx.strokeStyle=litCol;
-        ctx.stroke();
       }
-      i=end;bandIdx++;
+      i+=stepSize;bandIdx++;
     }
   }
+
   // Glossy top highlight (full length)
   tracePath();
   ctx.lineWidth=baseR*0.55;
@@ -1203,6 +1240,30 @@ function drawSnake(s,pts,isMe){
   ctx.strokeStyle=`rgba(255,255,255,0.35)`;
   ctx.stroke();
 
+  // TAPERED TAIL TIP — overlay last few segments with shrinking strokes
+  // so the snake tapers organically instead of ending in a hard cap.
+  // Only taper if the body is long enough that the taper isn't most of it.
+  if(len>=10){
+    const tailStart=Math.max(0,len-6);
+    // Overstroke the tail tip 3 times with decreasing widths to simulate
+    // a smooth taper from full thickness to ~50% at the very tip.
+    for(let pass=0;pass<3;pass++){
+      const segStart=tailStart+pass;
+      if(segStart>=len-1)break;
+      const widthMul=1-(pass+1)*0.18; // 0.82, 0.64, 0.46
+      // Re-paint outline + fill at narrower width over this tail segment.
+      if(traceRange(segStart,len-1)){
+        ctx.lineWidth=baseR*2*widthMul+3;
+        ctx.strokeStyle=outlineCol;
+        ctx.stroke();
+        traceRange(segStart,len-1);
+        ctx.lineWidth=baseR*2*widthMul;
+        ctx.strokeStyle=col;
+        ctx.stroke();
+      }
+    }
+  }
+
   // ===== HEAD OVERLAY (covers any body the head crosses during coil) =====
   // No outline — would create a visible seam at the head-body junction.
   // Just re-paint the FILL over the head region, so during coils the
@@ -1213,24 +1274,21 @@ function drawSnake(s,pts,isMe){
   ctx.strokeStyle=col;
   ctx.stroke();
   // Head color rings (re-painted on top — keeps pattern intact during coil)
-  if(pat==="striped"||pat==="gradient"){
-    const bandSize=pat==="gradient"?5:4;
+  if(pat==="striped"||pat==="gradient"||pat==="rings"){
+    const bandSize=pat==="gradient"?5:pat==="rings"?2:4;
+    const stepSize=pat==="rings"?4:bandSize;
     const headEnd=Math.min(headLen+2,len-1);
     let i=0,bandIdx=0;
     while(i<headEnd){
       const end=Math.min(i+bandSize,headEnd);
       if(bandIdx%2===1){
-        ctx.beginPath();
-        ctx.moveTo(pts[i][0],pts[i][1]);
-        for(let j=i;j<end;j++){
-          const mx=(pts[j][0]+pts[j+1][0])/2,my=(pts[j][1]+pts[j+1][1])/2;
-          ctx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
+        if(traceRange(i,end)){
+          ctx.lineWidth=baseR*2;
+          ctx.strokeStyle=secCol;
+          ctx.stroke();
         }
-        ctx.lineWidth=baseR*2;
-        ctx.strokeStyle=litCol;
-        ctx.stroke();
       }
-      i=end;bandIdx++;
+      i+=stepSize;bandIdx++;
     }
   }
   // Head shine (re-painted on top)
@@ -1243,15 +1301,15 @@ function drawSnake(s,pts,isMe){
   ctx.strokeStyle=`rgba(255,255,255,0.35)`;
   ctx.stroke();
 
-  // Eyes — slither.io style: large round whites with offset pupils
+  // Eyes — slither.io style: big round whites bulging off the head sides
   const[hx,hy]=pts[0];
   const dir=Math.atan2(pts[0][1]-pts[Math.min(3,len-1)][1],pts[0][0]-pts[Math.min(3,len-1)][0]);
-  const eyeR=baseR*.42;
+  // Slither's eyes look noticeably big against the head — ~50% of head radius
+  const eyeR=baseR*.48;
   // Eye direction lerps smoothly toward target (own snake: cursor, others: heading).
   // Independent of body rotation — creates the "glance" feel from slither.io.
   let aimDir=dir;
   if(isMe){
-    // Smooth lerp of pupil aim direction toward cursor
     const targetEye=aim;
     let dd=targetEye-smoothEyeDir;
     while(dd>Math.PI)dd-=2*Math.PI;
@@ -1259,24 +1317,25 @@ function drawSnake(s,pts,isMe){
     smoothEyeDir+=dd*0.18;
     aimDir=smoothEyeDir;
   }
-  for(const off of[-.55,.55]){
-    const ex=hx+Math.cos(dir+off)*baseR*.58;
-    const ey=hy+Math.sin(dir+off)*baseR*.58;
-    // Subtle dark outline around eye
-    ctx.beginPath();ctx.arc(ex,ey,eyeR+1,0,Math.PI*2);
-    ctx.fillStyle="rgba(0,0,0,0.25)";ctx.fill();
+  for(const off of[-.58,.58]){
+    // Push eyes a little further out so they bulge over the head edge
+    const ex=hx+Math.cos(dir+off)*baseR*.62;
+    const ey=hy+Math.sin(dir+off)*baseR*.62;
+    // Thin dark rim around eye (the slither "edge" look)
+    ctx.beginPath();ctx.arc(ex,ey,eyeR+1.5,0,Math.PI*2);
+    ctx.fillStyle="rgba(0,0,0,0.35)";ctx.fill();
     // White sclera
     ctx.beginPath();ctx.arc(ex,ey,eyeR,0,Math.PI*2);
     ctx.fillStyle="#fff";ctx.fill();
-    // Pupil offset toward look direction (clamped to stay inside eye)
-    const pupilOff=eyeR*0.45;
+    // Pupil offset toward look direction (clamped inside eye)
+    const pupilOff=eyeR*0.42;
     const ppx=ex+Math.cos(aimDir)*pupilOff;
     const ppy=ey+Math.sin(aimDir)*pupilOff;
-    ctx.beginPath();ctx.arc(ppx,ppy,eyeR*.55,0,Math.PI*2);
+    ctx.beginPath();ctx.arc(ppx,ppy,eyeR*.52,0,Math.PI*2);
     ctx.fillStyle="#111";ctx.fill();
     // Tiny white glint for life
-    ctx.beginPath();ctx.arc(ppx-eyeR*0.15,ppy-eyeR*0.15,eyeR*0.18,0,Math.PI*2);
-    ctx.fillStyle="rgba(255,255,255,0.85)";ctx.fill();
+    ctx.beginPath();ctx.arc(ppx-eyeR*0.18,ppy-eyeR*0.18,eyeR*0.22,0,Math.PI*2);
+    ctx.fillStyle="rgba(255,255,255,0.9)";ctx.fill();
   }
 
   // Direction arrow (mobile only, farther out)
