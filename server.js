@@ -170,6 +170,7 @@ class Room {
     p.alive = true;
     p._curSpeed = BASE_SPEED;
     p._stormTicks = 0;
+    p._stepAcc = 0;
 
     p.powerups = [];        // array of {type, until}
     p.points = [];
@@ -428,66 +429,35 @@ class Room {
       p._curSpeed += (targetSpeed - p._curSpeed) * 0.4;
       const speed = p._curSpeed;
 
-      // ===== HEAD: move forward at current heading =====
-      const head = p.points[0];
-      p.points[0] = {
-        x: head.x + Math.cos(p.heading) * speed,
-        y: head.y + Math.sin(p.heading) * speed,
-      };
-
-      // ===== BODY: simple rigid chain at wsep =====
-      // Each segment is pulled (or pushed) to exactly wsep behind the
-      // one ahead. Boost uses elastic catch-up rate CST so the body
-      // visibly stretches during the boost.
+      // ===== HEAD + BODY: queue-based (slither.io style) =====
+      // Body is the head's PAST positions sampled at wsep intervals.
+      // This means the body literally traces the head's path — when
+      // the head circles, the body wraps around the circle naturally,
+      // forming the slither.io coil shape.
       const wsep = this.getWsep(p);
-      const k = isBoosting ? CST : 1.0;
-      for (let i = 1; i < p.points.length; i++) {
-        const ahead = p.points[i - 1];
-        const curr = p.points[i];
-        const dx = ahead.x - curr.x;
-        const dy = ahead.y - curr.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist > 0.001) {
-          const err = dist - wsep;
-          const move = err * k / dist;
-          p.points[i] = {
-            x: curr.x + dx * move,
-            y: curr.y + dy * move,
-          };
-        }
+      const head = p.points[0];
+      const nx = head.x + Math.cos(p.heading) * speed;
+      const ny = head.y + Math.sin(p.heading) * speed;
+
+      if (!p._stepAcc) p._stepAcc = 0;
+      p._stepAcc += speed;
+      if (p._stepAcc >= wsep) {
+        // Cross wsep boundary → save old head position as new body point
+        p._stepAcc -= wsep;
+        p.points.unshift({ x: nx, y: ny });
+      } else {
+        // Sub-step: just update head position smoothly
+        p.points[0] = { x: nx, y: ny };
       }
 
-      // ===== GROWTH: add tail segments gradually =====
-      // Slither: mass increase accumulates fullness. When mass crosses
-      // sct+1 threshold, a new segment is added at the tail.
-      // CRITICAL: limit to 1 segment per tick so rapid mass changes
-      // (like test mode Shift+↑ for +100) don't extrude all segments
-      // in the same direction. Body grows naturally over time.
-      if (p.mass >= p.sct + 1 && p.points.length >= 2) {
-        p.sct++;
-        const last = p.points[p.points.length - 1];
-        const prev = p.points[p.points.length - 2];
-        const tdx = last.x - prev.x;
-        const tdy = last.y - prev.y;
-        const td = Math.hypot(tdx, tdy);
-        if (td > 0.01) {
-          p.points.push({
-            x: last.x + (tdx / td) * wsep,
-            y: last.y + (tdy / td) * wsep,
-          });
-        } else {
-          p.points.push({
-            x: last.x - Math.cos(p.heading) * wsep,
-            y: last.y - Math.sin(p.heading) * wsep,
-          });
-        }
-      }
-      // ===== SHRINK: remove 1 tail segment per tick =====
-      // Same rationale as growth — gradual change avoids body jumps.
-      if (p.mass < p.sct && p.sct > 2 && p.points.length > 2) {
-        p.sct--;
-        p.points.pop();
-      }
+      // ===== GROW/SHRINK: bring sct closer to mass, 1/tick =====
+      // sct is the target body-part count; mass tracks fractional growth.
+      if (p.mass >= p.sct + 1) p.sct++;
+      else if (p.mass < p.sct && p.sct > 2) p.sct--;
+
+      // ===== TRIM body to sct points =====
+      // Body = head's past positions queue. Keep most recent sct points.
+      if (p.points.length > p.sct) p.points.length = p.sct;
     }
 
     /* 3. Eating + Magnet + Power-up pickup */
