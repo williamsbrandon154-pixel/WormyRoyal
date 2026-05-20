@@ -24,7 +24,10 @@ const NSP2             = 0.5;             // slither's nsp2 (speed per sc)
 // Boost ratio nsp3 / (nsp1+nsp2) = 12 / 4.75 = 2.526× base
 // In our units: BOOST adds enough delta to reach 2.5× total.
 const BOOST_DELTA      = 1.83;            // px/tick added during boost (gives ~2.5× total)
-const START_SCT        = 8;
+// Slither.io spawns with 27 body segments (reference/slither-game.js
+// line 191242: `for (var i = 27; i >= 1; i--)`). At sc=1.236 the snake
+// already looks like a proper noodle, not a stub.
+const START_SCT        = 27;
 const BOOST_MIN_SCT    = 5;
 const WSEP_BASE        = 6;               // slither's wsep = 6 * sc
 const BODY_R_BASE      = 5;
