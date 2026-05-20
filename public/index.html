@@ -528,6 +528,29 @@ const WSEP_BASE = 6;    // slither's wsep = 6 * sc
 // sc = thickness factor; min 1 (tiny), max 6 (huge)
 function sc_of(sct){ return Math.min(6, 1 + (sct - 2) / 106); }
 
+// === Slither's exact score formula ===
+// Source: reference/slither-game.js line 141454
+//   score = floor((fpsls[sct] + fam/fmlts[sct] - 1) * 15 - 5)
+//   where fmlts[i] = (1 - i/mscps)^2.25 and fpsls[i] = Σ 1/fmlts[j] for j<i
+// The score grows much faster than sct because 1/fmlts blows up as sct
+// approaches mscps. At sct=30 (very early), score ≈ 440. So when a
+// slither snake shows "score 429" it's a tiny baby snake — NOT sct=429.
+const SCORE_MSCPS = 300;
+const SCORE_FMLTS = new Float64Array(SCORE_MSCPS + 2048);
+for (let i = 0; i < SCORE_FMLTS.length; i++){
+  if (i >= SCORE_MSCPS) SCORE_FMLTS[i] = SCORE_FMLTS[SCORE_MSCPS - 1];
+  else SCORE_FMLTS[i] = Math.pow(1 - i / SCORE_MSCPS, 2.25);
+}
+const SCORE_FPSLS = new Float64Array(SCORE_FMLTS.length);
+SCORE_FPSLS[0] = 0;
+for (let i = 1; i < SCORE_FPSLS.length; i++){
+  SCORE_FPSLS[i] = SCORE_FPSLS[i-1] + 1 / Math.max(0.0001, SCORE_FMLTS[i-1]);
+}
+function slitherScore(sct){
+  const idx = Math.max(0, Math.min(SCORE_FPSLS.length - 1, sct|0));
+  return Math.max(0, Math.floor((SCORE_FPSLS[idx] - 1) * 15 - 5));
+}
+
 // Initialize a snake's local body from the server's authoritative pts.
 // The server subsamples body points to save bandwidth (every 2nd or 3rd
 // point), so we resample the polyline at wsep intervals to produce
@@ -697,20 +720,23 @@ function updateHUD(m){
   const me=m.s.find(x=>x.id===myId);
   if(me&&me.m>lastMass&&lastMass>0&&amAlive)playFoodSound();
   if(me)lastMass=me.m;
-  // Test mode: keep size label live
+  // Test mode: keep size label live (sct, not score)
   if(isTestMode&&me)$("testSizeLabel").textContent=me.m;
   // Only update DOM every 4th tick (~8fps for HUD text, reduces reflows)
   _hudTick++;
   if(_hudTick%4!==0)return;
-  $("lenVal").textContent=me?me.m:"—";
+  // Slither's exact score formula: non-linear, score grows much faster
+  // than sct so big scores correspond to small sct values.
+  const scoreOf=(sct)=>slitherScore(sct);
+  $("lenVal").textContent=me?scoreOf(me.m):"—";
   const sorted=[...m.s].sort((a,b)=>b.m-a.m);
   const rank=me?sorted.findIndex(x=>x.id===myId)+1:"-";
   $("rankVal").textContent=rank;
   $("totalVal").textContent=m.total;
-  $("massBox").textContent=me?"Score: "+me.m:"";
+  $("massBox").textContent=me?"Score: "+scoreOf(me.m):"";
   // Leaderboard
   const top=sorted.slice(0,10);
-  $("lbList").innerHTML=top.map((x,i)=>`<div class="lr"><span class="rk">#${i+1}</span><span class="n" style="color:${x.c}">${esc(x.n)}</span><span class="m" style="color:${x.c}">${x.m}</span></div>`).join("");
+  $("lbList").innerHTML=top.map((x,i)=>`<div class="lr"><span class="rk">#${i+1}</span><span class="n" style="color:${x.c}">${esc(x.n)}</span><span class="m" style="color:${x.c}">${scoreOf(x.m)}</span></div>`).join("");
 }
 
 // ===== LOBBY =====
