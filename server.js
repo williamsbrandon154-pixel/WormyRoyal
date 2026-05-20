@@ -178,23 +178,39 @@ class Room {
     this.broadcastLobby();
   }
 
-  /* ---- snake spawning (avoids other snakes) ---- */
+  /* ---- snake spawning (hunger-games style: on the border edge) ---- */
   spawnSnake(p) {
-    let hx, hy, safe;
-    for (let attempt = 0; attempt < 30; attempt++) {
-      const r = rand(120, this.borderR * 0.55);
-      const a = rand(0, Math.PI * 2);
-      hx = Math.cos(a) * r;
-      hy = Math.sin(a) * r;
-      safe = true;
+    // Place every snake on a ring near the border, evenly distributed
+    // away from any other live snakes (like Hunger Games tributes around
+    // the Cornucopia). Heads point inward so nobody walks into the wall
+    // off the spawn.
+    const SPAWN_RADIUS = this.borderR * 0.92;
+    const SLOT_COUNT = 32;
+    let bestSlot = 0;
+    let bestMinDist = -1;
+    // Random rotation of the slot grid so every round looks different.
+    const rotOff = Math.random() * (Math.PI * 2);
+    for (let s = 0; s < SLOT_COUNT; s++) {
+      const angle = rotOff + s * (Math.PI * 2 / SLOT_COUNT);
+      const cx = this.borderCenterX + Math.cos(angle) * SPAWN_RADIUS;
+      const cy = this.borderCenterY + Math.sin(angle) * SPAWN_RADIUS;
+      let minDist = Infinity;
       for (const q of this.players.values()) {
         if (q === p || !q.alive || q.points.length === 0) continue;
         const qh = q.points[0];
-        if (dist2(hx, hy, qh.x, qh.y) < 10000) { safe = false; break; }
+        const d = dist2(qh.x, qh.y, cx, cy);
+        if (d < minDist) minDist = d;
       }
-      if (safe) break;
+      if (minDist > bestMinDist) {
+        bestMinDist = minDist;
+        bestSlot = s;
+      }
     }
-    p.heading = Math.atan2(-hy, -hx);
+    const angle = rotOff + bestSlot * (Math.PI * 2 / SLOT_COUNT);
+    const hx = this.borderCenterX + Math.cos(angle) * SPAWN_RADIUS;
+    const hy = this.borderCenterY + Math.sin(angle) * SPAWN_RADIUS;
+    // Heading: face the centre of the arena
+    p.heading = Math.atan2(this.borderCenterY - hy, this.borderCenterX - hx);
     p.targetAngle = p.heading;
     p.sct = START_SCT;
     p.fam = 0;
