@@ -607,9 +607,10 @@ function reconcilePrediction(serverX, serverY){
     // We mis-predicted by a lot (probably died/respawned). Snap.
     pred.x = serverX; pred.y = serverY;
   } else {
-    // Slow blend — invisibly catches up over ~half a second
-    pred.x += ex * 0.08;
-    pred.y += ey * 0.08;
+    // Very slow blend — let prediction lead, server is a gentle correction
+    // (any harder and the snake "fights" the mouse on small errors).
+    pred.x += ex * 0.03;
+    pred.y += ey * 0.03;
   }
 }
 
@@ -1813,24 +1814,18 @@ function render(){
     }
     if(_foodBorn.size>next.f.length+200) _foodBorn.clear();
 
-    // Pass 1: base sprite at normal alpha
+    // Single pass — scale-pulse the food sprite (cheaper than the previous
+    // two-pass additive-blend approach, which was ~400 drawImage + a
+    // composite-mode change per frame at 200 food and was dropping frames
+    // on slower hardware). The size pulse keeps the "alive" look.
     ctx.globalAlpha=1.0;
     ctx.globalCompositeOperation="source-over";
-    for(let i=0;i<vc;i+=5){
-      const sx=vis[i], sy=vis[i+1], ci=vis[i+2], rad=vis[i+4];
-      const fsz=fsz0*rad;
-      ctx.drawImage(getFoodSprite(ci),sx-fsz/2,sy-fsz/2,fsz,fsz);
-    }
-    // Pass 2: additive pulsing glow overlay — full 0..1 pulse range.
-    ctx.globalCompositeOperation="lighter";
     for(let i=0;i<vc;i+=5){
       const sx=vis[i], sy=vis[i+1], ci=vis[i+2], pulse=vis[i+3], rad=vis[i+4];
-      ctx.globalAlpha=pulse*rad;
-      const fsz=fsz0*rad;
+      // Scale pulses 90% .. 110% based on the per-food cos breathing
+      const fsz=fsz0*rad*(0.9+0.2*pulse);
       ctx.drawImage(getFoodSprite(ci),sx-fsz/2,sy-fsz/2,fsz,fsz);
     }
-    ctx.globalAlpha=1.0;
-    ctx.globalCompositeOperation="source-over";
   }
 
   // Power-ups on map
