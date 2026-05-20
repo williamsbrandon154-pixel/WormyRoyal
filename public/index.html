@@ -515,11 +515,55 @@ const WSEP_BASE = 6;    // slither's wsep = 6 * sc
 function sc_of(sct){ return Math.min(6, 1 + (sct - 2) / 106); }
 
 // Initialize a snake's local body from the server's authoritative pts.
-// Called the first time we observe a snake, or when divergence is detected.
-function initLocalBody(snakeId, serverPts){
-  const pts = [];
+// The server subsamples body points to save bandwidth (every 2nd or 3rd
+// point), so we resample the polyline at wsep intervals to produce
+// sct+1 properly-spaced segments. Without this, the local body would
+// start short + stretched-looking and slowly fill in as the snake moves.
+function initLocalBody(snakeId, serverPts, sct){
+  // Read the (possibly-subsampled) polyline.
+  const sub = [];
   for (let i = 0; i < serverPts.length; i += 2){
-    pts.push({ x: serverPts[i], y: serverPts[i+1] });
+    sub.push({ x: serverPts[i], y: serverPts[i+1] });
+  }
+  let pts;
+  if (sub.length >= 2 && sct && sct > 1){
+    // Walk the polyline at wsep intervals from head toward tail.
+    const wsep = WSEP_BASE * sc_of(sct);
+    pts = [{ x: sub[0].x, y: sub[0].y }]; // head
+    let segIdx = 0;
+    let segT = 0;
+    const target = sct + 1;
+    while (pts.length < target && segIdx < sub.length - 1){
+      let remaining = wsep;
+      // Walk wsep along the polyline starting from (segIdx, segT)
+      while (remaining > 0 && segIdx < sub.length - 1){
+        const a = sub[segIdx];
+        const b = sub[segIdx + 1];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const segLen = Math.sqrt(dx*dx + dy*dy);
+        const segLeft = segLen * (1 - segT);
+        if (segLeft >= remaining){
+          if (segLen > 0) segT += remaining / segLen;
+          remaining = 0;
+        } else {
+          remaining -= segLeft;
+          segIdx++;
+          segT = 0;
+        }
+      }
+      if (segIdx < sub.length - 1){
+        const a = sub[segIdx];
+        const b = sub[segIdx + 1];
+        pts.push({ x: a.x + (b.x - a.x) * segT, y: a.y + (b.y - a.y) * segT });
+      } else if (sub.length > 0){
+        // Past the end of the polyline — clamp to tail
+        const last = sub[sub.length - 1];
+        pts.push({ x: last.x, y: last.y });
+        break;
+      }
+    }
+  } else {
+    pts = sub;
   }
   localBodies.set(snakeId, {
     pts,
@@ -1385,7 +1429,7 @@ function render(){
     }
     let ls=localBodies.get(s.id);
     if(!ls){
-      initLocalBody(s.id, s.p);
+      initLocalBody(s.id, s.p, s.m);
       ls=localBodies.get(s.id);
     }
     updateLocalBody(ls, hx, hy, s.m);
