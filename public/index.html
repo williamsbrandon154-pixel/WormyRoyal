@@ -488,7 +488,7 @@ $("createPrivateBtn").onclick=()=>{
 // ===== LEAVE / BACK TO MENU =====
 function backToMenu(){
   if(ws){ws.close();ws=null;}
-  myId=null;iAmHost=false;amAlive=false;isTestMode=false;spectatingId=null;
+  myId=null;iAmHost=false;amAlive=false;isTestMode=false;spectatingId=null;pred.inited=false;
   $("testExitBtn").style.display="none";
   $("testSizePanel").style.display="none";
   snapBuf.length=0;
@@ -558,6 +558,61 @@ const RENDER_DELAY=16;
 // id → { pts:[{x,y}], _stepAcc, _initialized }
 const localBodies = new Map();
 
+// === Client-side prediction for OWN snake's head ===
+// The network round-trip adds ~50-150 ms of input lag — your mouse moves,
+// server processes, server broadcasts, client renders. To eliminate that
+// perceived lag, we run the head's physics locally for the player's own
+// snake using slither's exact formulas, then smoothly reconcile when the
+// authoritative server position arrives.
+//
+// Other snakes are still rendered from snapshots (no prediction) since
+// we don't have their input.
+const pred = {
+  inited: false,
+  x: 0, y: 0,
+  heading: 0,
+  lastTimeMs: 0,
+};
+function resetPrediction(x, y, heading){
+  pred.inited = true;
+  pred.x = x; pred.y = y;
+  pred.heading = heading;
+  pred.lastTimeMs = performance.now();
+}
+// One step of predicted head physics. dt in seconds.
+function stepPrediction(dt, sct, isBoosting){
+  if (!pred.inited) return;
+  const sc = sc_of(sct);
+  const turnPerSec = PRED_MAMU * scang_of(sc) * PHYS_TICK_HZ;
+  let pxPerSec = speed_of(sc) * PHYS_TICK_HZ;
+  if (isBoosting && sct > 5) pxPerSec += PRED_BOOST_DELTA * PHYS_TICK_HZ;
+  // Turn toward aim at slither's exact turn rate
+  let dh = aim - pred.heading;
+  while (dh > Math.PI) dh -= 2 * Math.PI;
+  while (dh < -Math.PI) dh += 2 * Math.PI;
+  const maxTurn = turnPerSec * dt;
+  pred.heading += Math.max(-maxTurn, Math.min(maxTurn, dh));
+  // Advance forward
+  pred.x += Math.cos(pred.heading) * pxPerSec * dt;
+  pred.y += Math.sin(pred.heading) * pxPerSec * dt;
+}
+// Soft-correct toward the server's authoritative head when a snapshot arrives.
+// Small errors: gentle blend. Large errors (>100 world units): hard snap.
+function reconcilePrediction(serverX, serverY){
+  if (!pred.inited){ resetPrediction(serverX, serverY, 0); return; }
+  const ex = serverX - pred.x;
+  const ey = serverY - pred.y;
+  const errMag = Math.sqrt(ex*ex + ey*ey);
+  if (errMag > 100){
+    // We mis-predicted by a lot (probably died/respawned). Snap.
+    pred.x = serverX; pred.y = serverY;
+  } else {
+    // Slow blend — invisibly catches up over ~half a second
+    pred.x += ex * 0.08;
+    pred.y += ey * 0.08;
+  }
+}
+
 // CST = chain catch-up applied once per push. Slither uses 0.43 but
 // our chain settled at ~58% of expected length with that value (bodies
 // looked stubby for their score). 0.25 settles at ~76% length, closer
@@ -565,8 +620,20 @@ const localBodies = new Map();
 const CST = 0.25;
 const WSEP_BASE = 6;    // slither's wsep = 6 * sc
 
+// Physics constants mirrored from server (for client-side prediction).
+// Server uses these at 125 Hz ticks; we convert to per-second for the
+// client's variable-dt prediction loop.
+const PRED_BASE_SPEED = 1.2;   // px per 8ms-tick = ~150 px/sec at sc=1
+const PRED_NSP1 = 4.25;
+const PRED_NSP2 = 0.5;
+const PRED_BOOST_DELTA = 1.83; // per tick
+const PRED_MAMU = 0.033;       // rad per tick base turn
+const PHYS_TICK_HZ = 125;
+
 // sc = thickness factor; min 1 (tiny), max 6 (huge)
 function sc_of(sct){ return Math.min(6, 1 + (sct - 2) / 106); }
+function scang_of(sc){ return 0.13 + 0.87 * Math.pow((7 - sc) / 6, 1.7); }
+function speed_of(sc){ return PRED_BASE_SPEED * (PRED_NSP1 + PRED_NSP2*sc) / (PRED_NSP1 + PRED_NSP2); }
 
 // === Slither's exact score formula ===
 // Source: reference/slither-game.js line 141454
@@ -753,7 +820,7 @@ function handle(m){
     case"roundstart":hideScreens();countdown(m.countdownMs);break;
     case"you":amAlive=m.alive;$("spec").classList.toggle("on",!amAlive&&$("hud").classList.contains("on"));break;
     case"state":addSnap(m);$("hud").classList.add("on");hideScreens();updateHUD(m);$("warn").classList.remove("show");break;
-    case"died":amAlive=false;spectatingId=null;$("spec").classList.add("on");stopBoostSound();playDeathSound();break;
+    case"died":amAlive=false;spectatingId=null;pred.inited=false;$("spec").classList.add("on");stopBoostSound();playDeathSound();break;
     case"powerup":activePowerups.push({type:m.type,end:performance.now()+(m.type==="invincible"?10000:15000)});playPowerupSound(m.type);break;
     case"roundover":$("hud").classList.remove("on");$("spec").classList.remove("on");activePowerups=[];if(m.ended){hideWinAnimation()}else{showWinAnimation(m.winner,m.winnerId===myId,m)}break;
   }
@@ -1568,6 +1635,9 @@ function render(){
   // Bracket-interp each snake's head, then drive client-side chain
   // relaxation off the interpolated head. The body is computed locally at
   // 60 Hz — slither.io's architecture.
+  // For the player's OWN snake we use client-side prediction instead of
+  // snapshot interp so the head responds to mouse input instantly.
+  const predNow=performance.now();
   for(const s of next.s){
     const ps=findSn(prev,s.id);
     let hx=s.p[0], hy=s.p[1];
@@ -1579,6 +1649,22 @@ function render(){
     if(!ls){
       initLocalBody(s.id, s.p, s.m);
       ls=localBodies.get(s.id);
+    }
+    // CLIENT-SIDE PREDICTION for own snake only
+    if(s.id===myId && amAlive){
+      if(!pred.inited){
+        // Initialize predicted state from server's current head + heading
+        const dx=s.p[0]-(s.p.length>=4?s.p[2]:s.p[0]);
+        const dy=s.p[1]-(s.p.length>=4?s.p[3]:s.p[1]);
+        resetPrediction(s.p[0], s.p[1], Math.atan2(dy, dx)||aim);
+      }
+      // Step physics forward by elapsed time since last frame
+      const dt=Math.max(0.001, Math.min(0.1, (predNow-pred.lastTimeMs)/1000));
+      pred.lastTimeMs=predNow;
+      stepPrediction(dt, s.m, boosting);
+      // Soft-reconcile toward server's authoritative head
+      reconcilePrediction(s.p[0], s.p[1]);
+      hx=pred.x; hy=pred.y;
     }
     updateLocalBody(ls, hx, hy, s.m);
   }
