@@ -1491,16 +1491,17 @@ function drawSnake(s,pts,isMe){
     ctx.globalAlpha=1.0;
   }
 
-  // === STRIPES — paint csw (white-blend) bands over the body ===
-  // Slither's actual stripe rendering uses pre-rendered sprite images
-  // per skin variant (per_color_imgs[cv]) which we can't replicate
-  // without their art assets. Approximating with stroke passes at csw.
+  // === STRIPES — high-contrast bands ===
+  // Previous version used csw (white-blended) which was too subtle for
+  // most colors. Switched to cs04 (40% brightness = dark variant) which
+  // reads as a proper dark stripe band against the bright body. Same
+  // hue family so it looks like a single skin rather than a mismatch.
   if(pat==="striped"||pat==="gradient"||pat==="rings"){
-    const bandSize=pat==="gradient"?5:pat==="rings"?2:4;
-    const stepSize=pat==="rings"?4:bandSize;
+    const bandSize=pat==="gradient"?5:pat==="rings"?2:5;
+    const stepSize=pat==="rings"?5:bandSize;
     let i=0,bandIdx=0;
-    ctx.globalAlpha=0.8;
-    ctx.strokeStyle=csw;
+    ctx.globalAlpha=1.0;
+    ctx.strokeStyle=cs04;
     while(i<len-1){
       const end=Math.min(i+bandSize,len-1);
       if(bandIdx%2===1){
@@ -1512,7 +1513,6 @@ function drawSnake(s,pts,isMe){
       i+=stepSize;
       bandIdx++;
     }
-    ctx.globalAlpha=1.0;
   }
 
   // === HEAD OVERLAY — re-paint body fill over head region so the head
@@ -1539,11 +1539,12 @@ function drawSnake(s,pts,isMe){
     ctx.stroke();
     // Re-paint stripes on head too so the pattern stays consistent during coil
     if(pat==="striped"||pat==="gradient"||pat==="rings"){
-      const bandSize=pat==="gradient"?5:pat==="rings"?2:4;
-      const stepSize=pat==="rings"?4:bandSize;
+      const bandSize=pat==="gradient"?5:pat==="rings"?2:5;
+      const stepSize=pat==="rings"?5:bandSize;
       const headEnd=Math.min(headLen+2,len-1);
       let i=0,bandIdx=0;
-      ctx.strokeStyle=csw;
+      ctx.globalAlpha=1.0;
+      ctx.strokeStyle=cs04;
       while(i<headEnd){
         const end=Math.min(i+bandSize,headEnd);
         if(bandIdx%2===1){
@@ -1612,11 +1613,51 @@ function drawSnake(s,pts,isMe){
     ctx.fill();
   }
 
+  // Crown — drawn above the head when this is the previous tournament
+  // champion (server sets s.cw=1 in state broadcasts for private rooms).
+  if(s.cw){
+    const crownY=hy-halfW-18;
+    const crownW=halfW*1.4;
+    const crownH=halfW*0.85;
+    // Gold base (5-pointed crown silhouette)
+    ctx.save();
+    ctx.translate(hx, crownY);
+    // Subtle bob/sparkle so it reads as alive
+    const t=performance.now()*0.003;
+    ctx.translate(0, Math.sin(t)*1.5);
+    ctx.fillStyle="#FFD23F";
+    ctx.strokeStyle="#7a5a00";
+    ctx.lineWidth=1.5;
+    ctx.beginPath();
+    // Base band
+    ctx.moveTo(-crownW/2, crownH*0.5);
+    ctx.lineTo(crownW/2, crownH*0.5);
+    ctx.lineTo(crownW/2, 0);
+    // Three points (left, middle, right)
+    ctx.lineTo(crownW*0.3, crownH*0.2);
+    ctx.lineTo(crownW*0.15, -crownH*0.5);
+    ctx.lineTo(0, crownH*0.05);
+    ctx.lineTo(-crownW*0.15, -crownH*0.5);
+    ctx.lineTo(-crownW*0.3, crownH*0.2);
+    ctx.lineTo(-crownW/2, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // Gem dot in the middle
+    ctx.fillStyle="#ff4d6d";
+    ctx.beginPath();
+    ctx.arc(0, crownH*0.15, crownW*0.08, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   // Name
   ctx.fillStyle="rgba(255,255,255,.75)";
   ctx.font="600 12px Nunito,sans-serif";
   ctx.textAlign="center";
-  ctx.fillText(s.n+(isMe?" (you)":""),hx,hy-halfW-10);
+  // Nudge name up a bit if there's a crown so it doesn't overlap
+  const nameY=hy-halfW-(s.cw?halfW+8:10);
+  ctx.fillText(s.n+(isMe?" (you)":""),hx,nameY);
 }
 
 // ===== MAIN RENDER (snapshot buffer interpolation) =====

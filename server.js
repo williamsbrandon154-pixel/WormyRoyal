@@ -785,6 +785,8 @@ class Room {
         m: p.sct, p: pts,
         b: p.boost && p.sct > BOOST_MIN_SCT ? 1 : 0,
         pu: p.powerups.map(x => x.type),
+        // Crown flag — previous tournament champion (in this private room)
+        cw: p.id === this.tournamentCrownId ? 1 : 0,
       });
     }
 
