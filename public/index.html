@@ -161,6 +161,14 @@ label{display:block;font-size:10px;color:#666;text-transform:uppercase;letter-sp
     <option value="3">Feast</option>
     <option value="5">Insane</option>
   </select>
+  <label style="margin:8px 0 2px">Wins to Win Tournament</label>
+  <select id="setWins" style="width:100%;background:#0a0a14;border:1px solid #333;color:#fff;padding:7px;border-radius:6px;font:600 13px Nunito,sans-serif">
+    <option value="1">First to 1 (single match)</option>
+    <option value="3" selected>First to 3</option>
+    <option value="5">First to 5</option>
+    <option value="7">First to 7</option>
+    <option value="10">First to 10</option>
+  </select>
 </div>
 <button class="btn" id="startBtn">START ROUND</button>
 <button class="btn" id="waitBtn" disabled style="display:none;opacity:.4;cursor:not-allowed;background:#555">Waiting for host…</button>
@@ -747,7 +755,7 @@ function handle(m){
     case"state":addSnap(m);$("hud").classList.add("on");hideScreens();updateHUD(m);$("warn").classList.remove("show");break;
     case"died":amAlive=false;spectatingId=null;$("spec").classList.add("on");stopBoostSound();playDeathSound();break;
     case"powerup":activePowerups.push({type:m.type,end:performance.now()+(m.type==="invincible"?10000:15000)});playPowerupSound(m.type);break;
-    case"roundover":$("hud").classList.remove("on");$("spec").classList.remove("on");activePowerups=[];if(m.ended){hideWinAnimation()}else{showWinAnimation(m.winner,m.winnerId===myId)}break;
+    case"roundover":$("hud").classList.remove("on");$("spec").classList.remove("on");activePowerups=[];if(m.ended){hideWinAnimation()}else{showWinAnimation(m.winner,m.winnerId===myId,m)}break;
   }
 }
 let _hudTick=0;
@@ -795,7 +803,18 @@ function renderLobby(m){
   if(m.state==="lobby"||m.state==="postgame"){$("lobbyScr").classList.remove("hide");$("hud").classList.remove("on")}
   isPublicRoom=!!m.isPublic;
   const l=$("plist");l.innerHTML="";
-  m.players.forEach(p=>{const r=document.createElement("div");r.className="pr";r.innerHTML=`<span class="dot" style="background:${p.color}"></span><span>${esc(p.name)}</span>${p.isHost?'<span class="tag">HOST</span>':""}`;l.appendChild(r)});
+  // Sort by wins desc so leaderboard reads top-to-bottom
+  const sortedPlayers=[...m.players].sort((a,b)=>(b.wins||0)-(a.wins||0));
+  const winsNeeded=m.winsNeeded||m.settings?.winsNeeded||3;
+  sortedPlayers.forEach(p=>{
+    const r=document.createElement("div");
+    r.className="pr";
+    const crown=p.hasCrown?'<span title="Last tournament champion" style="margin-right:4px">👑</span>':'';
+    const winsBadge=`<span style="margin-left:auto;font:700 11px Nunito,sans-serif;color:#6FD3A6;background:rgba(111,211,166,0.12);padding:2px 7px;border-radius:8px">${p.wins||0}/${winsNeeded}</span>`;
+    const hostTag=p.isHost?'<span class="tag" style="margin-left:6px">HOST</span>':'';
+    r.innerHTML=`<span class="dot" style="background:${p.color}"></span>${crown}<span>${esc(p.name)}</span>${winsBadge}${hostTag}`;
+    l.appendChild(r);
+  });
   const playerCount=m.players.length;
 
   if(isPublicRoom){
@@ -813,7 +832,14 @@ function renderLobby(m){
     $("waitBtn").style.display=iAmHost?"none":"block";
     $("hostSettings").style.display=iAmHost?"block":"none";
   }
-  $("winLine").innerHTML=m.winner?`<b style="color:#6FD3A6">Winner: ${esc(m.winner)}</b>`:"";
+  // "Winner" line shows tournament champion if we have one, otherwise last round winner
+  if(m.tournamentChampion){
+    $("winLine").innerHTML=`<b style="color:#FFD23F;font-size:14px">🏆 Tournament Champion: ${esc(m.tournamentChampion)}</b>`;
+  } else if(m.winner){
+    $("winLine").innerHTML=`<b style="color:#6FD3A6">Round Winner: ${esc(m.winner)}</b>`;
+  } else {
+    $("winLine").innerHTML="";
+  }
   if(m.settings&&!isPublicRoom){
     $("setMap").value=m.settings.mapSize;
     $("setBorder").value=m.settings.borderSpeed;
@@ -821,6 +847,7 @@ function renderLobby(m){
     if(m.settings.snakeSpeed)$("setSpeed").value=m.settings.snakeSpeed;
     if(m.settings.boostSpeed)$("setBoost").value=m.settings.boostSpeed;
     if(m.settings.foodRate)$("setFood").value=m.settings.foodRate;
+    if(m.settings.winsNeeded)$("setWins").value=m.settings.winsNeeded;
   }
 }
 function esc(s){return s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
@@ -1027,7 +1054,7 @@ function renderFireworks(){
   fwCtx.globalAlpha=1;
 }
 
-function showWinAnimation(winnerName,isMe){
+function showWinAnimation(winnerName,isMe,msg){
   winShowing=true;
   const overlay=$("winOverlay");
   overlay.style.display="block";
@@ -1035,10 +1062,25 @@ function showWinAnimation(winnerName,isMe){
   const sub=$("winSub");
   const btn=$("endGameBtn");
 
-  title.textContent=isMe?"VICTORY ROYALE!":"GAME OVER";
-  sub.textContent=isMe?"You are the last snake standing!":winnerName?winnerName+" wins!":"Draw!";
-  title.style.color=isMe?"#6FD3A6":"#ffd23f";
-  title.style.textShadow=isMe?"0 0 30px #6FD3A6,0 0 60px #6FD3A680":"0 0 30px #ffd23f,0 0 60px #ffd23f80";
+  // Tournament champion takes priority over round winner display
+  const champion=msg&&msg.tournamentChampion;
+  if(champion){
+    title.textContent=isMe?"👑 TOURNAMENT CHAMPION! 👑":"🏆 TOURNAMENT WON";
+    sub.textContent=isMe?"You won the whole tournament!":champion+" won the tournament!";
+    title.style.color="#FFD23F";
+    title.style.textShadow="0 0 40px #FFD23F,0 0 80px #FFD23F";
+  } else if(msg&&msg.roundWins){
+    title.textContent=isMe?"VICTORY ROYALE!":"GAME OVER";
+    sub.textContent=(isMe?"You took the round! ":(winnerName?winnerName+" won the round! ":"Draw! "))+
+                    `(${msg.roundWins} / ${msg.winsNeeded} wins)`;
+    title.style.color=isMe?"#6FD3A6":"#ffd23f";
+    title.style.textShadow=isMe?"0 0 30px #6FD3A6,0 0 60px #6FD3A680":"0 0 30px #ffd23f,0 0 60px #ffd23f80";
+  } else {
+    title.textContent=isMe?"VICTORY ROYALE!":"GAME OVER";
+    sub.textContent=isMe?"You are the last snake standing!":winnerName?winnerName+" wins!":"Draw!";
+    title.style.color=isMe?"#6FD3A6":"#ffd23f";
+    title.style.textShadow=isMe?"0 0 30px #6FD3A6,0 0 60px #6FD3A680":"0 0 30px #ffd23f,0 0 60px #ffd23f80";
+  }
 
   // Sound
   if(isMe)playWinSound();
@@ -1106,7 +1148,7 @@ setInterval(()=>{
 $("startBtn").onclick=()=>{sendSettings();ws&&ws.send(JSON.stringify({t:"start"}))};
 function sendSettings(){
   if(!ws||!iAmHost)return;
-  ws.send(JSON.stringify({t:"settings",mapSize:+$("setMap").value,borderSpeed:+$("setBorder").value,maxPlayers:+$("setPlayers").value,snakeSpeed:+$("setSpeed").value,boostSpeed:+$("setBoost").value,foodRate:+$("setFood").value}));
+  ws.send(JSON.stringify({t:"settings",mapSize:+$("setMap").value,borderSpeed:+$("setBorder").value,maxPlayers:+$("setPlayers").value,snakeSpeed:+$("setSpeed").value,boostSpeed:+$("setBoost").value,foodRate:+$("setFood").value,winsNeeded:+$("setWins").value}));
 }
 $("setMap").onchange=sendSettings;
 $("setBorder").onchange=sendSettings;
@@ -1114,6 +1156,7 @@ $("setPlayers").onchange=sendSettings;
 $("setSpeed").onchange=sendSettings;
 $("setBoost").onchange=sendSettings;
 $("setFood").onchange=sendSettings;
+$("setWins").onchange=sendSettings;
 function findSn(snap,id){if(!snap)return null;for(const s of snap.s)if(s.id===id)return s;return null}
 
 // ===== PRE-RENDER: DARK HEX TILE (slither.io style, seamless) =====

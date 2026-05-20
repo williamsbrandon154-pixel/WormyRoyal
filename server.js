@@ -97,7 +97,14 @@ class Room {
       snakeSpeed: 1.0,     // multiplier for base speed
       boostSpeed: 1.0,     // multiplier for boost speed
       foodRate: 1.0,       // multiplier for food target count
+      winsNeeded: 3,       // tournament target — first to N round wins
     };
+
+    // Tournament state — persists across rounds within a single private room.
+    // Reset on tournament victory; cleared when room is destroyed.
+    this.tournamentWins = new Map();   // playerId → number of round wins
+    this.tournamentCrownId = null;     // last tournament champion's id (shows crown next session)
+    this.tournamentChampionName = null;
 
     // Border state
     this.borderR = this.settings.mapSize;
@@ -179,6 +186,7 @@ class Room {
     if (typeof s.snakeSpeed === "number") this.settings.snakeSpeed = Math.max(0.5, Math.min(3, s.snakeSpeed));
     if (typeof s.boostSpeed === "number") this.settings.boostSpeed = Math.max(0.5, Math.min(4, s.boostSpeed));
     if (typeof s.foodRate === "number") this.settings.foodRate = Math.max(0.25, Math.min(5, s.foodRate));
+    if (typeof s.winsNeeded === "number") this.settings.winsNeeded = Math.max(1, Math.min(20, s.winsNeeded));
     this.broadcastLobby();
   }
 
@@ -335,11 +343,31 @@ class Room {
     if (alive.length <= 1 && this.starterCount >= 1) {
       this.state = "postgame";
       this.winnerName = alive.length === 1 ? alive[0].name : null;
+      const winnerId = alive.length === 1 ? alive[0].id : null;
       this.phaseUntil = Date.now() + POSTGAME_MS;
+
+      // === Tournament tracking ===
+      let wins = 0;
+      let tournamentChampion = null;
+      if (winnerId != null) {
+        wins = (this.tournamentWins.get(winnerId) || 0) + 1;
+        this.tournamentWins.set(winnerId, wins);
+        if (wins >= this.settings.winsNeeded) {
+          // Tournament champion!
+          tournamentChampion = this.winnerName;
+          this.tournamentCrownId = winnerId;
+          this.tournamentChampionName = this.winnerName;
+          this.tournamentWins.clear(); // fresh tournament starts next round
+        }
+      }
+
       this.broadcast({
         t: "roundover",
         winner: this.winnerName,
-        winnerId: alive.length === 1 ? alive[0].id : null,
+        winnerId,
+        roundWins: wins,
+        winsNeeded: this.settings.winsNeeded,
+        tournamentChampion, // non-null only when somebody just won the whole thing
       });
       this.broadcastLobby();
     }
@@ -714,6 +742,8 @@ class Room {
   broadcastLobby() {
     const players = [...this.players.values()].map(p => ({
       id: p.id, name: p.name, isHost: p.isHost, alive: p.alive, color: p.color,
+      wins: this.tournamentWins.get(p.id) || 0,
+      hasCrown: p.id === this.tournamentCrownId,
     }));
     this.broadcast({
       t: "lobby", state: this.state, players,
@@ -721,6 +751,8 @@ class Room {
       settings: this.settings,
       isPublic: this.isPublic,
       isTestMode: this.isTestMode,
+      tournamentChampion: this.tournamentChampionName,
+      winsNeeded: this.settings.winsNeeded,
     });
   }
 
