@@ -634,6 +634,12 @@ function slitherScore(sct){
   return Math.max(0, Math.floor((SCORE_FPSLS[idx] - 1) * 15 - 5));
 }
 
+// Each body point's stripe group flips every STRIPE_BAND segments. The
+// group is FIXED at the point's birth so it doesn't "roll" along the
+// body as new segments push at the head.
+const STRIPE_BAND = 6;
+function _stripeGroup(idx){ return (Math.floor(idx / STRIPE_BAND) & 1); }
+
 // Initialize a snake's local body from the server's authoritative pts.
 // The server subsamples body points to save bandwidth (every 2nd or 3rd
 // point), so we resample the polyline at wsep intervals to produce
@@ -674,21 +680,27 @@ function initLocalBody(snakeId, serverPts, sct){
       if (segIdx < sub.length - 1){
         const a = sub[segIdx];
         const b = sub[segIdx + 1];
-        pts.push({ x: a.x + (b.x - a.x) * segT, y: a.y + (b.y - a.y) * segT });
+        pts.push({ x: a.x + (b.x - a.x) * segT, y: a.y + (b.y - a.y) * segT, g: _stripeGroup(pts.length) });
       } else if (sub.length > 0){
         // Past the end of the polyline — clamp to tail
         const last = sub[sub.length - 1];
-        pts.push({ x: last.x, y: last.y });
+        pts.push({ x: last.x, y: last.y, g: _stripeGroup(pts.length) });
         break;
       }
     }
   } else {
+    // Assign stripe groups to subsampled fallback
+    for (let i = 0; i < sub.length; i++) sub[i].g = _stripeGroup(i);
     pts = sub;
   }
   localBodies.set(snakeId, {
     pts,
     _stepAcc: 0,
     _initialized: true,
+    // Push counter — increments every wsep push. New head's stripe group
+    // is decided at birth from this counter so stripes stay welded to
+    // their segments instead of "rolling" with index shifts.
+    _pushCount: pts.length,
   });
 }
 
@@ -723,7 +735,9 @@ function updateLocalBody(ls, newHeadX, newHeadY, sct){
     ls._stepAcc -= wsep;
     // Unshift a copy of the new head — now pts[0] = head (keeps moving)
     // and pts[1] is the new frozen body segment.
-    ls.pts.unshift({ x: newHeadX, y: newHeadY });
+    // Stripe group is assigned NOW (at birth) using the push counter so
+    // it stays welded to this segment even as indices shift on later pushes.
+    ls.pts.unshift({ x: newHeadX, y: newHeadY, g: _stripeGroup(ls._pushCount++) });
 
     // Chain relaxation — mutate each segment in place to avoid creating
     // a fresh {x,y} object for every body point on every push (was the
@@ -1335,7 +1349,7 @@ function getFoodSprite(ci){
 // reference/slither-game.js (line numbers cited in comments). The body
 // is drawn as a single quadratic-curve stroke chain at slither's exact
 // line width and color algorithm — black outline + 80%-alpha body fill.
-function drawSnake(s,pts,isMe){
+function drawSnake(s,pts,isMe,grps){
   if(pts.length<2)return;
   const len=pts.length;
   const col=s.c;
@@ -1444,30 +1458,32 @@ function drawSnake(s,pts,isMe){
   ctx.lineWidth=lsz;
   ctx.stroke();
 
-  // === SLITHER CANDY-STRIPE — white bands every other 4-segment slot ===
-  // Matches the iconic red+white slither.io snake look. Pure white stripes
-  // contrast against any primary color.
-  // IMPORTANT: lineCap must be "butt" here. With "round" (the default for
-  // the body), each stripe's semicircle cap extends ~2.4 segments past
-  // its endpoints (lsz/2 > wsep), and adjacent stripes overlap into the
-  // gap between them — body ends up nearly all white.
-  {
-    const bandSize=4;
-    let i=0,bandIdx=0;
+  // === SLITHER CANDY-STRIPE — welded to each segment's birth-time group ===
+  // Each body point has g=0 or g=1 (assigned when the point was first
+  // pushed, based on STRIPE_BAND-sized cycles of the push counter).
+  // We iterate consecutive same-g runs and paint each "g=1" run white.
+  // The groups are STABLE — they don't shift when pts indices change, so
+  // stripes don't flicker or roll along the body as new pushes happen.
+  // lineCap=butt so adjacent stripes don't bleed past their endpoints.
+  if(grps){
     ctx.strokeStyle="#ffffff";
     ctx.lineCap="butt";
-    while(i<len-1){
-      const end=Math.min(i+bandSize,len-1);
-      if(bandIdx%2===1){
-        if(traceRange(i,end)){
-          ctx.lineWidth=lsz;
-          ctx.stroke();
+    let runStart=0;
+    let runG=grps[0]|0;
+    for(let i=1;i<=len;i++){
+      const g=i<len?(grps[i]|0):-1;
+      if(g!==runG){
+        if(runG===1 && i-1>runStart){
+          if(traceRange(runStart,Math.min(i,len-1))){
+            ctx.lineWidth=lsz;
+            ctx.stroke();
+          }
         }
+        runStart=i;
+        runG=g;
       }
-      i+=bandSize;
-      bandIdx++;
     }
-    ctx.lineCap="round"; // restore for subsequent strokes
+    ctx.lineCap="round";
   }
 
   // === HEAD OVERLAY — re-paint body fill + stripes over head region so
@@ -1477,22 +1493,26 @@ function drawSnake(s,pts,isMe){
   traceHead();
   ctx.lineWidth=lsz;
   ctx.stroke();
-  {
-    const bandSize=4;
+  // Head overlay stripes — same group-based logic as the body but limited
+  // to the head region so the head's color stays in sync during coils.
+  if(grps){
     const headEnd=Math.min(headLen+2,len-1);
-    let i=0,bandIdx=0;
     ctx.strokeStyle="#ffffff";
     ctx.lineCap="butt";
-    while(i<headEnd){
-      const end=Math.min(i+bandSize,headEnd);
-      if(bandIdx%2===1){
-        if(traceRange(i,end)){
-          ctx.lineWidth=lsz;
-          ctx.stroke();
+    let runStart=0;
+    let runG=grps[0]|0;
+    for(let i=1;i<=headEnd+1;i++){
+      const g=i<=headEnd?(grps[i]|0):-1;
+      if(g!==runG){
+        if(runG===1 && i-1>runStart){
+          if(traceRange(runStart,Math.min(i,headEnd))){
+            ctx.lineWidth=lsz;
+            ctx.stroke();
+          }
         }
+        runStart=i;
+        runG=g;
       }
-      i+=bandSize;
-      bandIdx++;
     }
     ctx.lineCap="round";
   }
@@ -1825,10 +1845,12 @@ function render(){
     const ls=localBodies.get(s.id);
     if(!ls||!ls.pts||ls.pts.length<2) continue;
     const pts=[];
+    const grps=[];
     for(let i=0;i<ls.pts.length;i++){
       pts.push(w2s(ls.pts[i].x, ls.pts[i].y));
+      grps.push(ls.pts[i].g||0);
     }
-    drawSnake(s,pts,s.id===myId);
+    drawSnake(s,pts,s.id===myId,grps);
   }
 
   // GC local-body state for snakes that died or left.
