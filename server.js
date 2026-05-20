@@ -425,7 +425,7 @@ class Room {
     const shrinkMs = this.settings.shrinkMs / spd;
     const minR = 120;
     const moveMs = 30000 / spd;   // how long it moves around
-    const finalMs = 20000 / spd;  // how long final shrink takes
+    const finalMs = 40000 / spd;  // how long final shrink takes (doubled — slower endgame)
 
     /* 1. Border phases */
     if (this.borderPhase === "waiting") {
@@ -445,9 +445,11 @@ class Room {
 
     if (this.borderPhase === "moving") {
       const moveElapsed = now - this.moveStartAt;
-      // Circle moves around the map center in a slow arc
-      const moveSpeed = 1.2 * spd;
-      this.moveAngle += 0.008 * spd;
+      // Circle drifts around the map center on a slow arc. Was moveSpeed=1.2
+      // (=150 px/sec) which felt too aggressive in the endgame; players
+      // couldn't react. Halved the linear drift and the angular turn rate.
+      const moveSpeed = 0.5 * spd;
+      this.moveAngle += 0.003 * spd;
       this.borderCenterX += Math.cos(this.moveAngle) * moveSpeed;
       this.borderCenterY += Math.sin(this.moveAngle) * moveSpeed;
       // Keep center within bounds
