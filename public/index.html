@@ -210,7 +210,7 @@ let ws,myId=null,iAmHost=false,amAlive=false,isTestMode=false;
 
 // ===== CUSTOMIZE SCREEN =====
 const PICK_COLORS=["#37e6c9","#ff5da2","#ffd23f","#7c5cff","#4ad66d","#ff7849","#43c6ff","#ff4d6d","#f72585","#80ed99","#ffbe0b","#c77dff"];
-const PATTERNS=["solid","striped","gradient","rings"];
+const PATTERNS=["solid","striped","gradient","rings","rainbow"];
 // Slither.io's signature two-color skins. Each primary pairs with a vivid
 // secondary so stripes/gradients pop instead of looking like brightness
 // variations of the base color. Yellow is the most common slither pair.
@@ -306,11 +306,25 @@ function drawSnakePreview(){
     }
   }
 
-  // Body fill
-  tracePreview();
-  prevCtx.lineWidth=r*2;
-  prevCtx.strokeStyle=col;
-  prevCtx.stroke();
+  // Body fill — rainbow is a per-segment disk chain; everything else
+  // is a single stroke pass.
+  if(chosenPattern==="rainbow"){
+    const hueOff=(performance.now()*0.02)%360;
+    prevCtx.globalAlpha=0.85;
+    for(let i=pts.length-1;i>=0;i--){
+      const hue=(hueOff+i*15)%360;
+      prevCtx.fillStyle=`hsl(${hue|0},85%,55%)`;
+      prevCtx.beginPath();
+      prevCtx.arc(pts[i][0],pts[i][1],r,0,Math.PI*2);
+      prevCtx.fill();
+    }
+    prevCtx.globalAlpha=1.0;
+  } else {
+    tracePreview();
+    prevCtx.lineWidth=r*2;
+    prevCtx.strokeStyle=col;
+    prevCtx.stroke();
+  }
 
   // Color stripes/rings — true two-color slither bands
   if(chosenPattern==="striped"||chosenPattern==="gradient"||chosenPattern==="rings"){
@@ -585,8 +599,10 @@ function updateLocalBody(ls, newHeadX, newHeadY, sct){
   const dy = newHeadY - head.y;
   const dist = Math.sqrt(dx*dx + dy*dy);
 
-  // Smoothly move head to new position (continuous motion every render frame)
-  ls.pts[0] = { x: newHeadX, y: newHeadY };
+  // Mutate head position in place — avoids allocating a new object every
+  // render frame for every snake (60 Hz × 10 snakes = 600 alloc/sec saved).
+  head.x = newHeadX;
+  head.y = newHeadY;
 
   if (dist < 0.0001) return;
 
@@ -603,18 +619,17 @@ function updateLocalBody(ls, newHeadX, newHeadY, sct){
     // and pts[1] is the new frozen body segment.
     ls.pts.unshift({ x: newHeadX, y: newHeadY });
 
-    // Chain relaxation: each segment lerps toward predecessor.
-    // n<=4 → ramp factor; else full CST.
+    // Chain relaxation — mutate each segment in place to avoid creating
+    // a fresh {x,y} object for every body point on every push (was the
+    // hot allocation path, ~200 allocs per push per snake).
     let n = 0;
     for (let m = 3; m < ls.pts.length; m++){
       n++;
       const mv = n <= 4 ? CST * n / 4 : CST;
       const ahead = ls.pts[m - 1];
       const curr = ls.pts[m];
-      ls.pts[m] = {
-        x: curr.x + (ahead.x - curr.x) * mv,
-        y: curr.y + (ahead.y - curr.y) * mv,
-      };
+      curr.x = curr.x + (ahead.x - curr.x) * mv;
+      curr.y = curr.y + (ahead.y - curr.y) * mv;
     }
 
     // Trim tail to match server's sct (server may have shrunk via boost).
@@ -1272,12 +1287,32 @@ function drawSnake(s,pts,isMe){
   // === BODY FILL — slither's lsz stroke at 80% alpha ===
   // The fill blends with the black outline beneath, giving the body
   // a subtle dark rim — that's slither's signature edge look.
-  ctx.globalAlpha=0.8;
-  ctx.strokeStyle=col;
-  tracePath();
-  ctx.lineWidth=lsz;
-  ctx.stroke();
-  ctx.globalAlpha=1.0;
+  // Rainbow pattern is special: per-segment hue cycle instead of flat fill.
+  if(pat==="rainbow"){
+    // Each body segment gets its own color via hue rotation. Renders as
+    // a chain of overlapping disks — same approach slither's render_mode 2
+    // uses (sprite per segment). Looks like the iconic rainbow skin.
+    // Hue advances by a fixed delta per segment so the body cycles every
+    // ~24 segments. Animated offset gives the snake a subtle shimmer.
+    const hueOff=(performance.now()*0.02)%360;
+    const halfWStroke=lsz/2;
+    ctx.globalAlpha=0.85;
+    for(let i=len-1;i>=0;i--){
+      const hue=(hueOff+i*15)%360;
+      ctx.fillStyle=`hsl(${hue|0},85%,55%)`;
+      ctx.beginPath();
+      ctx.arc(pts[i][0],pts[i][1],halfWStroke,0,Math.PI*2);
+      ctx.fill();
+    }
+    ctx.globalAlpha=1.0;
+  } else {
+    ctx.globalAlpha=0.8;
+    ctx.strokeStyle=col;
+    tracePath();
+    ctx.lineWidth=lsz;
+    ctx.stroke();
+    ctx.globalAlpha=1.0;
+  }
 
   // === STRIPES — paint csw (white-blend) bands over the body ===
   // Slither's actual stripe rendering uses pre-rendered sprite images
@@ -1305,28 +1340,44 @@ function drawSnake(s,pts,isMe){
 
   // === HEAD OVERLAY — re-paint body fill over head region so the head
   // stays on top when the snake coils on itself.
-  ctx.globalAlpha=0.8;
-  ctx.strokeStyle=col;
-  traceHead();
-  ctx.lineWidth=lsz;
-  ctx.stroke();
-  // Re-paint stripes on head too so the pattern stays consistent during coil
-  if(pat==="striped"||pat==="gradient"||pat==="rings"){
-    const bandSize=pat==="gradient"?5:pat==="rings"?2:4;
-    const stepSize=pat==="rings"?4:bandSize;
-    const headEnd=Math.min(headLen+2,len-1);
-    let i=0,bandIdx=0;
-    ctx.strokeStyle=csw;
-    while(i<headEnd){
-      const end=Math.min(i+bandSize,headEnd);
-      if(bandIdx%2===1){
-        if(traceRange(i,end)){
-          ctx.lineWidth=lsz;
-          ctx.stroke();
+  if(pat==="rainbow"){
+    // For rainbow we just re-draw the head disks at full alpha so they
+    // sit on top of any body the head overlaps during coil.
+    const hueOff=(performance.now()*0.02)%360;
+    const halfWStroke=lsz/2;
+    const headEndR=Math.min(headLen+2,len-1);
+    ctx.globalAlpha=1.0;
+    for(let i=headEndR;i>=0;i--){
+      const hue=(hueOff+i*15)%360;
+      ctx.fillStyle=`hsl(${hue|0},85%,55%)`;
+      ctx.beginPath();
+      ctx.arc(pts[i][0],pts[i][1],halfWStroke,0,Math.PI*2);
+      ctx.fill();
+    }
+  } else {
+    ctx.globalAlpha=0.8;
+    ctx.strokeStyle=col;
+    traceHead();
+    ctx.lineWidth=lsz;
+    ctx.stroke();
+    // Re-paint stripes on head too so the pattern stays consistent during coil
+    if(pat==="striped"||pat==="gradient"||pat==="rings"){
+      const bandSize=pat==="gradient"?5:pat==="rings"?2:4;
+      const stepSize=pat==="rings"?4:bandSize;
+      const headEnd=Math.min(headLen+2,len-1);
+      let i=0,bandIdx=0;
+      ctx.strokeStyle=csw;
+      while(i<headEnd){
+        const end=Math.min(i+bandSize,headEnd);
+        if(bandIdx%2===1){
+          if(traceRange(i,end)){
+            ctx.lineWidth=lsz;
+            ctx.stroke();
+          }
         }
+        i+=stepSize;
+        bandIdx++;
       }
-      i+=stepSize;
-      bandIdx++;
     }
   }
   ctx.globalAlpha=1.0;
