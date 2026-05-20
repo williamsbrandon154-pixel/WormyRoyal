@@ -210,9 +210,10 @@ class Room {
   getWsep(p) {
     return WSEP_BASE * this.getSC(p);
   }
-  // body radius (visual + collision)
+  // body radius (visual + collision) — slither.io: lsz = 29 * sc, radius = lsz/2.
+  // Source: reference/slither-game.js line 116673  (var lsz = 29 * ssc)
   snakeRadius(p) {
-    let r = BODY_R_BASE + 5 * this.getSC(p);
+    let r = 14.5 * this.getSC(p);
     if (this.hasPowerup(p, "jumbo")) r *= 1.6;
     return r;
   }
