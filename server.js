@@ -54,7 +54,11 @@ function growthThreshold(sct) {
   return f > 0.0001 ? 1 / f : 10000;
 }
 const BORDER_DRAIN     = 0.144;           // body parts lost per tick in storm (custom)
-const BROADCAST_EVERY  = 4;               // 30Hz network despite 125Hz physics
+// Broadcast on every 2nd physics tick = ~60 Hz network update rate over
+// the 125 Hz physics. Halves snapshot-to-snapshot jitter on the client.
+// Doubles outbound bandwidth (was 30 Hz). For a 10-player game this is
+// going from ~60 KB/s to ~120 KB/s — well within any modern connection.
+const BROADCAST_EVERY  = 2;
 
 const COLORS = [
   "#37e6c9", "#ff5da2", "#ffd23f", "#7c5cff",

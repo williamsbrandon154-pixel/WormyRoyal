@@ -531,7 +531,9 @@ const snapBuf=[];
 const SNAP_MAX=12;
 // One snapshot-period of jitter buffer (30 Hz broadcast = 33 ms cushion).
 // Just enough to let bracket-interp keep the head smooth.
-const RENDER_DELAY=33;
+// One render-frame of jitter buffer (was 33 ms = one 30 Hz snapshot
+// period; with broadcast now at 60 Hz we only need one frame of cushion).
+const RENDER_DELAY=16;
 
 // === SLITHER.IO architecture — head sparse, body computed locally =====
 // Slither's source proves the body is NOT shipped over the network — only
