@@ -318,9 +318,11 @@ function drawSnakePreview(){
   prevCtx.stroke();
 
   // Canonical slither candy-stripe: WHITE bands every other 4-segment slot.
+  // lineCap=butt so stripes don't bleed past their endpoints.
   {
     const bandSize=4;
     let i=0,bandIdx=0;
+    prevCtx.lineCap="butt";
     while(i<pts.length-1){
       const end=Math.min(i+bandSize,pts.length-1);
       if(bandIdx%2===1){
@@ -336,6 +338,7 @@ function drawSnakePreview(){
       }
       i+=bandSize;bandIdx++;
     }
+    prevCtx.lineCap="round";
   }
 
   // Glossy top highlight
@@ -1444,10 +1447,15 @@ function drawSnake(s,pts,isMe){
   // === SLITHER CANDY-STRIPE — white bands every other 4-segment slot ===
   // Matches the iconic red+white slither.io snake look. Pure white stripes
   // contrast against any primary color.
+  // IMPORTANT: lineCap must be "butt" here. With "round" (the default for
+  // the body), each stripe's semicircle cap extends ~2.4 segments past
+  // its endpoints (lsz/2 > wsep), and adjacent stripes overlap into the
+  // gap between them — body ends up nearly all white.
   {
     const bandSize=4;
     let i=0,bandIdx=0;
     ctx.strokeStyle="#ffffff";
+    ctx.lineCap="butt";
     while(i<len-1){
       const end=Math.min(i+bandSize,len-1);
       if(bandIdx%2===1){
@@ -1459,6 +1467,7 @@ function drawSnake(s,pts,isMe){
       i+=bandSize;
       bandIdx++;
     }
+    ctx.lineCap="round"; // restore for subsequent strokes
   }
 
   // === HEAD OVERLAY — re-paint body fill + stripes over head region so
@@ -1473,6 +1482,7 @@ function drawSnake(s,pts,isMe){
     const headEnd=Math.min(headLen+2,len-1);
     let i=0,bandIdx=0;
     ctx.strokeStyle="#ffffff";
+    ctx.lineCap="butt";
     while(i<headEnd){
       const end=Math.min(i+bandSize,headEnd);
       if(bandIdx%2===1){
@@ -1484,6 +1494,7 @@ function drawSnake(s,pts,isMe){
       i+=bandSize;
       bandIdx++;
     }
+    ctx.lineCap="round";
   }
 
   // === EYES — slither's exact drawEyes (line ~143501) ===
