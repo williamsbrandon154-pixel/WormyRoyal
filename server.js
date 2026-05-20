@@ -546,10 +546,13 @@ class Room {
           }
         }
 
-        // ===== CHAIN RELAXATION (slither's exact algorithm, ONCE per push) =====
-        // From slither source: runs in the pts.push handler, not every frame.
-        // Each segment lerps toward predecessor with cst ramp.
-        const CST = 0.43;
+        // ===== CHAIN RELAXATION (algorithm matches slither, lower CST) =====
+        // Slither's source uses cst=0.43. Simulated against our setup the
+        // chain settles at ~58% of (sct * wsep) length, making snakes look
+        // stubby at high sct ("body looks too thick relative to length").
+        // Dropping CST to 0.25 settles at ~76% length — visible curve but
+        // not collapsed. The 4-segment ramp at the head (n<=4) is kept.
+        const CST = 0.25;
         let n = 0;
         for (let m = 3; m < p.points.length; m++) {
           n++;

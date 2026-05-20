@@ -550,7 +550,11 @@ const RENDER_DELAY=16;
 // id → { pts:[{x,y}], _stepAcc, _initialized }
 const localBodies = new Map();
 
-const CST = 0.43;       // slither's chain catch-up — applied once per push
+// CST = chain catch-up applied once per push. Slither uses 0.43 but
+// our chain settled at ~58% of expected length with that value (bodies
+// looked stubby for their score). 0.25 settles at ~76% length, closer
+// to the noodle shape. See server.js for the same constant.
+const CST = 0.25;
 const WSEP_BASE = 6;    // slither's wsep = 6 * sc
 
 // sc = thickness factor; min 1 (tiny), max 6 (huge)
