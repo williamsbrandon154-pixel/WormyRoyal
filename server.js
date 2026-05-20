@@ -454,12 +454,16 @@ class Room {
 
       // ===== SPEED (slither.io: ssp = 5.39 + 0.4*sc) =====
       let targetSpeed = this.getSpeed(p) * this.settings.snakeSpeed;
+      // BoostMe powerup: small passive speed bump (+15%) for the whole
+      // duration, on top of removing boost-drain.
+      const hasBoostMe = this.hasPowerup(p, "boostme");
+      if (hasBoostMe) targetSpeed *= 1.15;
       const isBoosting = p.boost && p.sct > BOOST_MIN_SCT;
       if (isBoosting) {
         targetSpeed += BOOST_DELTA * this.settings.boostSpeed;
         // Slither: boost drain reduces fam (~1% of current size/sec).
         // At 125Hz: 0.008 of one segment per tick.
-        if (!this.hasPowerup(p, "boostme")) {
+        if (!hasBoostMe) {
           p.fam -= 0.008;
           // Boost drops food trail
           if (Math.random() < 0.045) {
