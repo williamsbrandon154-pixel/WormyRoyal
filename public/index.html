@@ -6,7 +6,9 @@
 <title>WormyRoyal.io</title>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800&display=swap" rel="stylesheet">
 <style>
-*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none;-webkit-touch-callout:none}
+/* Inputs still need selection so nickname/room-code fields work */
+input,textarea{-webkit-user-select:text;-moz-user-select:text;-ms-user-select:text;user-select:text;-webkit-touch-callout:default}
 html,body{height:100%;overflow:hidden;background:#0E1218;color:#e0e0e0;font-family:'Nunito',system-ui,sans-serif}
 canvas#game{position:fixed;inset:0;display:block;touch-action:none;cursor:default}
 .screen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:20;background:rgba(10,14,20,.93)}
