@@ -670,7 +670,10 @@ function updateLocalBody(ls, newHeadX, newHeadY, sct){
 }
 let camX=0,camY=0;
 const isTouch=matchMedia("(pointer:coarse)").matches;
-const ZOOM_BASE=isTouch?0.40:1.5; // slightly higher mobile base since we now zoom out with growth
+// Desktop ZOOM_BASE matches slither.io's gsc ≈ 1.0 on desktop. At ZOOM=1.5
+// the snake's screen size was 50% bigger than slither's at the same world
+// radius — that read as "ginormous" even with correct body radius.
+const ZOOM_BASE=isTouch?0.40:1.0;
 let ZOOM=ZOOM_BASE; // dynamic — lerps toward target based on snake size
 let smoothEyeDir=0; // smooth-lerped eye direction (separate from body heading)
 function addSnap(s){s._t=performance.now();snapBuf.push(s);if(snapBuf.length>SNAP_MAX)snapBuf.shift()}
