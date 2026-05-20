@@ -225,9 +225,14 @@ class Room {
   getSC(p) {
     return Math.min(6, 1 + (p.sct - 2) / 106);
   }
-  // scang = turn rate scaler, quadratic falloff
+  // scang = turn rate scaler. Slither.io's formula uses exponent 2,
+  // which gives big snakes ~15% turn rate at sc=6 and ~40% at sc=3.6
+  // (our practical max). That feels too tight — easy to wall into the
+  // storm when huge. Exponent 1.7 keeps the same shape but lifts the
+  // curve a bit: ~13% more turn rate at sc=3.6, ~23% more at sc=6.
+  // Small snakes unaffected (curve still ends at 1.0 at sc=1).
   getScang(sc) {
-    return 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
+    return 0.13 + 0.87 * Math.pow((7 - sc) / 6, 1.7);
   }
   // wsep = segment spacing in pixels (scales with thickness)
   getWsep(p) {
