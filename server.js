@@ -30,6 +30,26 @@ const WSEP_BASE        = 6;               // slither's wsep = 6 * sc
 const BODY_R_BASE      = 5;
 const FOOD_TARGET      = 200;
 const FOOD_VAL         = 1;               // fam value per food (slither has variable, ours fixed)
+
+// === Slither's exact diminishing-returns growth curve ===
+// Source: reference/slither-game.js line 42798 setMscps()
+// fmlts[i] = (1 - i/mscps)^2.25  for i in 0..mscps
+// Growth threshold for sct -> sct+1 is 1 / fmlts[sct].
+// At sct=0, fmlts=1.0 → threshold=1 (fast early growth).
+// At sct=200 (with mscps=300), fmlts=0.094 → threshold=10.6 food per segment.
+// At sct=290, threshold ≈ 850 food per segment — growth nearly stops.
+const MSCPS = 300;
+const FMLTS = new Float64Array(MSCPS + 2048);
+for (let i = 0; i < FMLTS.length; i++) {
+  if (i >= MSCPS) FMLTS[i] = FMLTS[MSCPS - 1];
+  else FMLTS[i] = Math.pow(1 - i / MSCPS, 2.25);
+}
+function growthThreshold(sct) {
+  // 1 / fmlts[sct], with safety clamp
+  const idx = Math.max(0, Math.min(FMLTS.length - 1, sct));
+  const f = FMLTS[idx];
+  return f > 0.0001 ? 1 / f : 10000;
+}
 const BORDER_DRAIN     = 0.144;           // body parts lost per tick in storm (custom)
 const BROADCAST_EVERY  = 4;               // 30Hz network despite 125Hz physics
 
@@ -472,12 +492,16 @@ class Room {
         p.points.unshift({ x: nx, y: ny });
 
         // ===== GROW/SHRINK via fam (only when pushing) =====
-        if (p.fam >= 1) {
+        // Slither's exact non-linear threshold: 1/fmlts[sct].
+        // Fast at low sct, very slow approaching mscps=300.
+        const growT = growthThreshold(p.sct);
+        if (p.fam >= growT) {
           p.sct++;
-          p.fam -= 1;
+          p.fam -= growT;
         } else if (p.fam < 0 && p.sct > 2) {
+          const shrinkT = growthThreshold(p.sct - 1);
           p.sct--;
-          p.fam += 1;
+          p.fam += shrinkT;
         }
 
         // Trim to sct+1 (because index 0 is head; body has sct points)
