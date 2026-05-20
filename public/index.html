@@ -1233,12 +1233,12 @@ function drawSnake(s,pts,isMe){
     ctx.lineWidth=baseR*2+12;ctx.strokeStyle=`rgba(255,215,0,${flk})`;ctx.stroke();
   }
 
-  // SUBTLE OUTER GLOW — slither's signature soft halo, very faint.
-  // Only when not boosting (boost has its own bigger glow).
+  // SUBTLE OUTER GLOW — barely-visible halo, more like slither.io's
+  // soft rim than a glow. Only when not boosting.
   if(!isBoosting){
     tracePath();
-    ctx.lineWidth=baseR*2+8;
-    ctx.strokeStyle=col+"22";
+    ctx.lineWidth=baseR*2+4;
+    ctx.strokeStyle=col+"18";
     ctx.stroke();
   }
 
@@ -1283,30 +1283,6 @@ function drawSnake(s,pts,isMe){
   ctx.lineWidth=baseR*0.18;
   ctx.strokeStyle=`rgba(255,255,255,0.35)`;
   ctx.stroke();
-
-  // TAPERED TAIL TIP — overlay last few segments with shrinking strokes
-  // so the snake tapers organically instead of ending in a hard cap.
-  // Only taper if the body is long enough that the taper isn't most of it.
-  if(len>=10){
-    const tailStart=Math.max(0,len-6);
-    // Overstroke the tail tip 3 times with decreasing widths to simulate
-    // a smooth taper from full thickness to ~50% at the very tip.
-    for(let pass=0;pass<3;pass++){
-      const segStart=tailStart+pass;
-      if(segStart>=len-1)break;
-      const widthMul=1-(pass+1)*0.18; // 0.82, 0.64, 0.46
-      // Re-paint outline + fill at narrower width over this tail segment.
-      if(traceRange(segStart,len-1)){
-        ctx.lineWidth=baseR*2*widthMul+3;
-        ctx.strokeStyle=outlineCol;
-        ctx.stroke();
-        traceRange(segStart,len-1);
-        ctx.lineWidth=baseR*2*widthMul;
-        ctx.strokeStyle=col;
-        ctx.stroke();
-      }
-    }
-  }
 
   // ===== HEAD OVERLAY (covers any body the head crosses during coil) =====
   // No outline — would create a visible seam at the head-body junction.
