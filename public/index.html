@@ -1550,45 +1550,49 @@ function render(){
   ctx.fillStyle=vg;
   ctx.fillRect(0,0,W,H);
 
-  // === Food rendering — slither.io style: wobble + pulse glow ===
-  // Slither's food does three things every frame:
-  //   1) Drifts in a 6-unit-radius circle at its own per-food frequency
-  //   2) Pulses brightness via an additive overlay cos(gfr/13)
-  //   3) Pops in on spawn (scale 0→1 with cosine ease) — we approximate
-  //      with a position-hash 'first seen' map so newly-appearing food
-  //      grows in instead of popping.
+  // === Food rendering — slither.io exact constants ===
+  // Source: reference/slither-game.js line 58968 (food init) + 103021
+  // (update) + 113495 (draw). Slither's food behaviour:
+  //   1) Wobble: rx = xx + cos(wsp * gfr) * 6
+  //      wsp = (2*rand - 1) * 0.0225  (per-food, range ±0.0225)
+  //      gfr = frame counter, +=vfr per tick (so +=1 per render frame at 60Hz)
+  //      Initial gfr = rand * 64 (per-food phase)
+  //   2) Pulse: alpha = 0.5 + 0.5 * cos(gfr / 13)  (full 0..1 range)
+  //   3) Pop-in: rad ramps 0→1 via 0.5*(1 - cos(π*fr)) over ~150ms.
+  //      We do not have a per-food fr field, so we approximate with a
+  //      position-keyed first-seen timestamp.
   {
-    const nowFood=performance.now();
-    const gfr=nowFood*0.06;   // slither's frame counter equivalent
+    const nowMs=performance.now();
+    // gfr is in slither's frame-counter units (60 per second at 60 Hz).
+    const gfrNow=nowMs*0.06;
     const fsz0=28*ZOOM;
-    const half0=fsz0/2;
-    // Pre-compute visible food into scratch buffer once
     const vis=_foodVis;
     let vc=0;
     for(let i=0;i<next.f.length;i+=2){
       const fx0=next.f[i], fy0=next.f[i+1];
-      // Deterministic per-food phase + drift frequency from position hash
-      const phase=fx0*0.07+fy0*0.03;
-      const wsp=0.0008+0.0004*(((fx0*11+fy0*13)|0)&7)/7;
-      const wob=phase+nowFood*wsp;
-      const fx=fx0+Math.cos(wob)*6;
-      const fy=fy0+Math.sin(wob)*6;
+      // Per-food random-but-deterministic values from position hash.
+      // wsp range = ±0.0225 (slither's exact range).
+      const hash=(fx0*97+fy0*31)|0;
+      const wsp=(((hash&1023)/1023)-0.5)*0.045; // -0.0225 .. +0.0225
+      const gfrPhase=(hash>>>5)%64;             // 0..63 initial offset
+      const gfr=gfrNow+gfrPhase;
+      // Wobble: cos(wsp * gfr) * 6 (slither's exact formula)
+      const fx=fx0+Math.cos(wsp*gfr)*6;
+      const fy=fy0+Math.sin(wsp*gfr)*6;
       const sx=(fx-camX)*ZOOM+W/2;
       const sy=(fy-camY)*ZOOM+H/2;
       if(sx<-25||sx>W+25||sy<-25||sy>H+25)continue;
       const ci=Math.abs((fx0*7+fy0*3)|0)%FC.length;
-      const pulse=0.25+0.25*Math.cos(gfr/13+phase);
-      // Spawn pop-in: rad ramps 0..1 with cosine ease over ~0.5 sec
+      // Pulse: full 0..1 brightness range — slither's exact formula.
+      const pulse=0.5+0.5*Math.cos(gfr/13);
+      // Spawn pop-in via position-keyed birth timestamp.
       const key=(fx0|0)*10000+(fy0|0);
       let bornAt=_foodBorn.get(key);
-      if(bornAt===undefined){ bornAt=nowFood; _foodBorn.set(key, bornAt); }
-      const age=(nowFood-bornAt)/500; // 0..1 over 500ms
+      if(bornAt===undefined){ bornAt=nowMs; _foodBorn.set(key, bornAt); }
+      const age=(nowMs-bornAt)/300; // 0..1 over 300ms (slither ~rsp*vfr/150)
       const rad=age>=1?1:0.5*(1-Math.cos(Math.PI*Math.min(1,age)));
       vis[vc++]=sx; vis[vc++]=sy; vis[vc++]=ci; vis[vc++]=pulse; vis[vc++]=rad;
     }
-    // Garbage-collect _foodBorn entries that aren't visible anymore — every
-    // few seconds to keep the map small. Cheap heuristic: just clear when
-    // grossly oversized.
     if(_foodBorn.size>next.f.length+200) _foodBorn.clear();
 
     // Pass 1: base sprite at normal alpha
@@ -1599,7 +1603,7 @@ function render(){
       const fsz=fsz0*rad;
       ctx.drawImage(getFoodSprite(ci),sx-fsz/2,sy-fsz/2,fsz,fsz);
     }
-    // Pass 2: additive pulsing glow overlay (slither's signature breathing)
+    // Pass 2: additive pulsing glow overlay — full 0..1 pulse range.
     ctx.globalCompositeOperation="lighter";
     for(let i=0;i<vc;i+=5){
       const sx=vis[i], sy=vis[i+1], ci=vis[i+2], pulse=vis[i+3], rad=vis[i+4];
