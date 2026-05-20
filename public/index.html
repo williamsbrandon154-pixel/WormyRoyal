@@ -1186,6 +1186,12 @@ function drawGrid(W,H){
 // ===== FOOD (pre-rendered glow sprites) =====
 const FC=["#FF4D5A","#4DFFA1","#FFD24D","#4DA8FF","#C56BFF","#FF6BD0","#72EFDD","#FFBE0B"];
 const foodSprites={};
+// Persistent scratch buffer for food rendering (avoids per-frame alloc).
+// Holds 5 floats per visible food: sx, sy, ci, pulse, rad.
+const _foodVis=new Float32Array(2048*5);
+// Tracks "when did we first see this food?" for spawn pop-in animation.
+// Keyed by position hash (fx|0)*10000 + (fy|0).
+const _foodBorn=new Map();
 function getFoodSprite(ci){
   if(foodSprites[ci])return foodSprites[ci];
   const sz=28;
@@ -1544,14 +1550,65 @@ function render(){
   ctx.fillStyle=vg;
   ctx.fillRect(0,0,W,H);
 
-  // Food (glowing orbs — use pre-rendered sprites for performance)
-  for(let i=0;i<next.f.length;i+=2){
-    const fx=next.f[i],fy=next.f[i+1];
-    const[sx,sy]=w2s(fx,fy);
-    if(sx<-20||sx>W+20||sy<-20||sy>H+20)continue;
-    const ci=Math.abs((fx*7+fy*3)|0)%FC.length;
-    const fsz=28*ZOOM;
-    ctx.drawImage(getFoodSprite(ci),sx-fsz/2,sy-fsz/2,fsz,fsz);
+  // === Food rendering — slither.io style: wobble + pulse glow ===
+  // Slither's food does three things every frame:
+  //   1) Drifts in a 6-unit-radius circle at its own per-food frequency
+  //   2) Pulses brightness via an additive overlay cos(gfr/13)
+  //   3) Pops in on spawn (scale 0→1 with cosine ease) — we approximate
+  //      with a position-hash 'first seen' map so newly-appearing food
+  //      grows in instead of popping.
+  {
+    const nowFood=performance.now();
+    const gfr=nowFood*0.06;   // slither's frame counter equivalent
+    const fsz0=28*ZOOM;
+    const half0=fsz0/2;
+    // Pre-compute visible food into scratch buffer once
+    const vis=_foodVis;
+    let vc=0;
+    for(let i=0;i<next.f.length;i+=2){
+      const fx0=next.f[i], fy0=next.f[i+1];
+      // Deterministic per-food phase + drift frequency from position hash
+      const phase=fx0*0.07+fy0*0.03;
+      const wsp=0.0008+0.0004*(((fx0*11+fy0*13)|0)&7)/7;
+      const wob=phase+nowFood*wsp;
+      const fx=fx0+Math.cos(wob)*6;
+      const fy=fy0+Math.sin(wob)*6;
+      const sx=(fx-camX)*ZOOM+W/2;
+      const sy=(fy-camY)*ZOOM+H/2;
+      if(sx<-25||sx>W+25||sy<-25||sy>H+25)continue;
+      const ci=Math.abs((fx0*7+fy0*3)|0)%FC.length;
+      const pulse=0.25+0.25*Math.cos(gfr/13+phase);
+      // Spawn pop-in: rad ramps 0..1 with cosine ease over ~0.5 sec
+      const key=(fx0|0)*10000+(fy0|0);
+      let bornAt=_foodBorn.get(key);
+      if(bornAt===undefined){ bornAt=nowFood; _foodBorn.set(key, bornAt); }
+      const age=(nowFood-bornAt)/500; // 0..1 over 500ms
+      const rad=age>=1?1:0.5*(1-Math.cos(Math.PI*Math.min(1,age)));
+      vis[vc++]=sx; vis[vc++]=sy; vis[vc++]=ci; vis[vc++]=pulse; vis[vc++]=rad;
+    }
+    // Garbage-collect _foodBorn entries that aren't visible anymore — every
+    // few seconds to keep the map small. Cheap heuristic: just clear when
+    // grossly oversized.
+    if(_foodBorn.size>next.f.length+200) _foodBorn.clear();
+
+    // Pass 1: base sprite at normal alpha
+    ctx.globalAlpha=1.0;
+    ctx.globalCompositeOperation="source-over";
+    for(let i=0;i<vc;i+=5){
+      const sx=vis[i], sy=vis[i+1], ci=vis[i+2], rad=vis[i+4];
+      const fsz=fsz0*rad;
+      ctx.drawImage(getFoodSprite(ci),sx-fsz/2,sy-fsz/2,fsz,fsz);
+    }
+    // Pass 2: additive pulsing glow overlay (slither's signature breathing)
+    ctx.globalCompositeOperation="lighter";
+    for(let i=0;i<vc;i+=5){
+      const sx=vis[i], sy=vis[i+1], ci=vis[i+2], pulse=vis[i+3], rad=vis[i+4];
+      ctx.globalAlpha=pulse*rad;
+      const fsz=fsz0*rad;
+      ctx.drawImage(getFoodSprite(ci),sx-fsz/2,sy-fsz/2,fsz,fsz);
+    }
+    ctx.globalAlpha=1.0;
+    ctx.globalCompositeOperation="source-over";
   }
 
   // Power-ups on map
