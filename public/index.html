@@ -97,8 +97,10 @@ label{display:block;font-size:10px;color:#666;text-transform:uppercase;letter-sp
 <h1 style="font-size:32px">Customize <span>Snake</span></h1>
 <div class="sub">Pick your colors</div>
 <canvas id="snakePreview" width="280" height="120" style="display:block;margin:0 auto 16px;border-radius:12px;background:#0b1018"></canvas>
-<label>Color</label>
-<div id="colorPicker" style="display:flex;gap:6px;justify-content:center;margin:6px 0 14px;flex-wrap:wrap"></div>
+<label>Primary Color</label>
+<div id="colorPicker" style="display:flex;gap:6px;justify-content:center;margin:6px 0 10px;flex-wrap:wrap"></div>
+<label>Pattern</label>
+<div id="patternPicker" style="display:flex;gap:6px;justify-content:center;margin:6px 0 14px;flex-wrap:wrap"></div>
 <button class="btn" id="customBackBtn">DONE</button>
 </div>
 </div>
@@ -226,10 +228,7 @@ let spectatingId=null;
 
 // ===== CUSTOMIZE SCREEN =====
 const PICK_COLORS=["#37e6c9","#ff5da2","#ffd23f","#7c5cff","#4ad66d","#ff7849","#43c6ff","#ff4d6d","#f72585","#80ed99","#ffbe0b","#c77dff"];
-// Patterns kept internally for compat with older clients/server but the
-// UI no longer exposes them — every snake renders with the canonical
-// slither candy-stripe look (white bands on primary color).
-const PATTERNS=["striped"];
+const PATTERNS=["solid","striped","gradient","rings","rainbow"];
 // Slither.io's signature two-color skins. Each primary pairs with a vivid
 // secondary so stripes/gradients pop instead of looking like brightness
 // variations of the base color. Yellow is the most common slither pair.
@@ -249,7 +248,7 @@ const COLOR_PAIRS={
 };
 function secondaryColor(hex){ return COLOR_PAIRS[hex] || "#fffacd"; }
 let chosenColor=PICK_COLORS[0];
-let chosenPattern="striped"; // always candy-stripe now (UI no longer lets you pick)
+let chosenPattern="solid";
 let previewAnim=null;
 
 (function buildPicker(){
@@ -264,6 +263,20 @@ let previewAnim=null;
       drawSnakePreview();
     };
     el.appendChild(d);
+  });
+  // Pattern picker
+  const pp=$("patternPicker");
+  PATTERNS.forEach((p,i)=>{
+    const d=document.createElement("div");
+    d.style.cssText=`padding:6px 14px;border-radius:12px;background:#1a1a2e;border:2px solid ${i===0?"#fff":"transparent"};cursor:pointer;font:600 11px Nunito,sans-serif;color:#ccc;text-transform:capitalize;transition:border .15s`;
+    d.textContent=p;
+    d.onclick=()=>{
+      chosenPattern=p;
+      pp.querySelectorAll("div").forEach(x=>x.style.borderColor="transparent");
+      d.style.borderColor="#fff";
+      drawSnakePreview();
+    };
+    pp.appendChild(d);
   });
 })();
 
@@ -311,18 +324,31 @@ function drawSnakePreview(){
     }
   }
 
-  // Body fill (single stroke pass)
-  tracePreview();
-  prevCtx.lineWidth=r*2;
-  prevCtx.strokeStyle=col;
-  prevCtx.stroke();
+  // Body fill — rainbow is a per-segment disk chain; everything else
+  // is a single stroke pass.
+  if(chosenPattern==="rainbow"){
+    const hueOff=(performance.now()*0.02)%360;
+    prevCtx.globalAlpha=0.85;
+    for(let i=pts.length-1;i>=0;i--){
+      const hue=(hueOff+i*15)%360;
+      prevCtx.fillStyle=`hsl(${hue|0},85%,55%)`;
+      prevCtx.beginPath();
+      prevCtx.arc(pts[i][0],pts[i][1],r,0,Math.PI*2);
+      prevCtx.fill();
+    }
+    prevCtx.globalAlpha=1.0;
+  } else {
+    tracePreview();
+    prevCtx.lineWidth=r*2;
+    prevCtx.strokeStyle=col;
+    prevCtx.stroke();
+  }
 
-  // Canonical slither candy-stripe: WHITE bands every other 4-segment slot.
-  // lineCap=butt so stripes don't bleed past their endpoints.
-  {
-    const bandSize=4;
+  // Color stripes/rings — true two-color slither bands
+  if(chosenPattern==="striped"||chosenPattern==="gradient"||chosenPattern==="rings"){
+    const bandSize=chosenPattern==="gradient"?5:chosenPattern==="rings"?2:4;
+    const stepSize=chosenPattern==="rings"?4:bandSize;
     let i=0,bandIdx=0;
-    prevCtx.lineCap="butt";
     while(i<pts.length-1){
       const end=Math.min(i+bandSize,pts.length-1);
       if(bandIdx%2===1){
@@ -333,12 +359,11 @@ function drawSnakePreview(){
           prevCtx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
         }
         prevCtx.lineWidth=r*2;
-        prevCtx.strokeStyle="#ffffff";
+        prevCtx.strokeStyle=secCol;
         prevCtx.stroke();
       }
-      i+=bandSize;bandIdx++;
+      i+=stepSize;bandIdx++;
     }
-    prevCtx.lineCap="round";
   }
 
   // Glossy top highlight
@@ -582,10 +607,9 @@ function reconcilePrediction(serverX, serverY){
     // We mis-predicted by a lot (probably died/respawned). Snap.
     pred.x = serverX; pred.y = serverY;
   } else {
-    // Very slow blend — let prediction lead, server is a gentle correction
-    // (any harder and the snake "fights" the mouse on small errors).
-    pred.x += ex * 0.03;
-    pred.y += ey * 0.03;
+    // Slow blend — invisibly catches up over ~half a second
+    pred.x += ex * 0.08;
+    pred.y += ey * 0.08;
   }
 }
 
@@ -1437,25 +1461,47 @@ function drawSnake(s,pts,isMe){
   ctx.lineWidth=lsz+5*ZOOM;
   ctx.stroke();
 
-  // === BODY FILL — solid primary color at full alpha ===
-  ctx.globalAlpha=1.0;
-  ctx.strokeStyle=col;
-  tracePath();
-  ctx.lineWidth=lsz;
-  ctx.stroke();
+  // === BODY FILL — slither's lsz stroke at 80% alpha ===
+  // The fill blends with the black outline beneath, giving the body
+  // a subtle dark rim — that's slither's signature edge look.
+  // Rainbow pattern is special: per-segment hue cycle instead of flat fill.
+  if(pat==="rainbow"){
+    // Each body segment gets its own color via hue rotation. Renders as
+    // a chain of overlapping disks — same approach slither's render_mode 2
+    // uses (sprite per segment). Looks like the iconic rainbow skin.
+    // Hue advances by a fixed delta per segment so the body cycles every
+    // ~24 segments. Animated offset gives the snake a subtle shimmer.
+    const hueOff=(performance.now()*0.02)%360;
+    const halfWStroke=lsz/2;
+    ctx.globalAlpha=0.85;
+    for(let i=len-1;i>=0;i--){
+      const hue=(hueOff+i*15)%360;
+      ctx.fillStyle=`hsl(${hue|0},85%,55%)`;
+      ctx.beginPath();
+      ctx.arc(pts[i][0],pts[i][1],halfWStroke,0,Math.PI*2);
+      ctx.fill();
+    }
+    ctx.globalAlpha=1.0;
+  } else {
+    ctx.globalAlpha=0.8;
+    ctx.strokeStyle=col;
+    tracePath();
+    ctx.lineWidth=lsz;
+    ctx.stroke();
+    ctx.globalAlpha=1.0;
+  }
 
-  // === SLITHER CANDY-STRIPE — white bands every other 4-segment slot ===
-  // Matches the iconic red+white slither.io snake look. Pure white stripes
-  // contrast against any primary color.
-  // IMPORTANT: lineCap must be "butt" here. With "round" (the default for
-  // the body), each stripe's semicircle cap extends ~2.4 segments past
-  // its endpoints (lsz/2 > wsep), and adjacent stripes overlap into the
-  // gap between them — body ends up nearly all white.
-  {
-    const bandSize=4;
+  // === STRIPES — high-contrast bands ===
+  // Previous version used csw (white-blended) which was too subtle for
+  // most colors. Switched to cs04 (40% brightness = dark variant) which
+  // reads as a proper dark stripe band against the bright body. Same
+  // hue family so it looks like a single skin rather than a mismatch.
+  if(pat==="striped"||pat==="gradient"||pat==="rings"){
+    const bandSize=pat==="gradient"?5:pat==="rings"?2:5;
+    const stepSize=pat==="rings"?5:bandSize;
     let i=0,bandIdx=0;
-    ctx.strokeStyle="#ffffff";
-    ctx.lineCap="butt";
+    ctx.globalAlpha=1.0;
+    ctx.strokeStyle=cs04;
     while(i<len-1){
       const end=Math.min(i+bandSize,len-1);
       if(bandIdx%2===1){
@@ -1464,38 +1510,55 @@ function drawSnake(s,pts,isMe){
           ctx.stroke();
         }
       }
-      i+=bandSize;
+      i+=stepSize;
       bandIdx++;
     }
-    ctx.lineCap="round"; // restore for subsequent strokes
   }
 
-  // === HEAD OVERLAY — re-paint body fill + stripes over head region so
-  // the head stays on top when the snake coils on itself.
-  ctx.globalAlpha=1.0;
-  ctx.strokeStyle=col;
-  traceHead();
-  ctx.lineWidth=lsz;
-  ctx.stroke();
-  {
-    const bandSize=4;
-    const headEnd=Math.min(headLen+2,len-1);
-    let i=0,bandIdx=0;
-    ctx.strokeStyle="#ffffff";
-    ctx.lineCap="butt";
-    while(i<headEnd){
-      const end=Math.min(i+bandSize,headEnd);
-      if(bandIdx%2===1){
-        if(traceRange(i,end)){
-          ctx.lineWidth=lsz;
-          ctx.stroke();
-        }
-      }
-      i+=bandSize;
-      bandIdx++;
+  // === HEAD OVERLAY — re-paint body fill over head region so the head
+  // stays on top when the snake coils on itself.
+  if(pat==="rainbow"){
+    // For rainbow we just re-draw the head disks at full alpha so they
+    // sit on top of any body the head overlaps during coil.
+    const hueOff=(performance.now()*0.02)%360;
+    const halfWStroke=lsz/2;
+    const headEndR=Math.min(headLen+2,len-1);
+    ctx.globalAlpha=1.0;
+    for(let i=headEndR;i>=0;i--){
+      const hue=(hueOff+i*15)%360;
+      ctx.fillStyle=`hsl(${hue|0},85%,55%)`;
+      ctx.beginPath();
+      ctx.arc(pts[i][0],pts[i][1],halfWStroke,0,Math.PI*2);
+      ctx.fill();
     }
-    ctx.lineCap="round";
+  } else {
+    ctx.globalAlpha=0.8;
+    ctx.strokeStyle=col;
+    traceHead();
+    ctx.lineWidth=lsz;
+    ctx.stroke();
+    // Re-paint stripes on head too so the pattern stays consistent during coil
+    if(pat==="striped"||pat==="gradient"||pat==="rings"){
+      const bandSize=pat==="gradient"?5:pat==="rings"?2:5;
+      const stepSize=pat==="rings"?5:bandSize;
+      const headEnd=Math.min(headLen+2,len-1);
+      let i=0,bandIdx=0;
+      ctx.globalAlpha=1.0;
+      ctx.strokeStyle=cs04;
+      while(i<headEnd){
+        const end=Math.min(i+bandSize,headEnd);
+        if(bandIdx%2===1){
+          if(traceRange(i,end)){
+            ctx.lineWidth=lsz;
+            ctx.stroke();
+          }
+        }
+        i+=stepSize;
+        bandIdx++;
+      }
+    }
   }
+  ctx.globalAlpha=1.0;
 
   // === EYES — slither's exact drawEyes (line ~143501) ===
   // Position: head + cos(fang)*ed + perpendicular*(esp+0.5)
@@ -1750,18 +1813,24 @@ function render(){
     }
     if(_foodBorn.size>next.f.length+200) _foodBorn.clear();
 
-    // Single pass — scale-pulse the food sprite (cheaper than the previous
-    // two-pass additive-blend approach, which was ~400 drawImage + a
-    // composite-mode change per frame at 200 food and was dropping frames
-    // on slower hardware). The size pulse keeps the "alive" look.
+    // Pass 1: base sprite at normal alpha
     ctx.globalAlpha=1.0;
     ctx.globalCompositeOperation="source-over";
     for(let i=0;i<vc;i+=5){
-      const sx=vis[i], sy=vis[i+1], ci=vis[i+2], pulse=vis[i+3], rad=vis[i+4];
-      // Scale pulses 90% .. 110% based on the per-food cos breathing
-      const fsz=fsz0*rad*(0.9+0.2*pulse);
+      const sx=vis[i], sy=vis[i+1], ci=vis[i+2], rad=vis[i+4];
+      const fsz=fsz0*rad;
       ctx.drawImage(getFoodSprite(ci),sx-fsz/2,sy-fsz/2,fsz,fsz);
     }
+    // Pass 2: additive pulsing glow overlay — full 0..1 pulse range.
+    ctx.globalCompositeOperation="lighter";
+    for(let i=0;i<vc;i+=5){
+      const sx=vis[i], sy=vis[i+1], ci=vis[i+2], pulse=vis[i+3], rad=vis[i+4];
+      ctx.globalAlpha=pulse*rad;
+      const fsz=fsz0*rad;
+      ctx.drawImage(getFoodSprite(ci),sx-fsz/2,sy-fsz/2,fsz,fsz);
+    }
+    ctx.globalAlpha=1.0;
+    ctx.globalCompositeOperation="source-over";
   }
 
   // Power-ups on map
