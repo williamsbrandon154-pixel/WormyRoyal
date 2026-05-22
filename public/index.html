@@ -488,7 +488,7 @@ $("createPrivateBtn").onclick=()=>{
 // ===== LEAVE / BACK TO MENU =====
 function backToMenu(){
   if(ws){ws.close();ws=null;}
-  myId=null;iAmHost=false;amAlive=false;isTestMode=false;spectatingId=null;pred.inited=false;
+  myId=null;iAmHost=false;amAlive=false;isTestMode=false;spectatingId=null;
   $("testExitBtn").style.display="none";
   $("testSizePanel").style.display="none";
   snapBuf.length=0;
@@ -558,61 +558,6 @@ const RENDER_DELAY=16;
 // id → { pts:[{x,y}], _stepAcc, _initialized }
 const localBodies = new Map();
 
-// === Client-side prediction for OWN snake's head ===
-// The network round-trip adds ~50-150 ms of input lag — your mouse moves,
-// server processes, server broadcasts, client renders. To eliminate that
-// perceived lag, we run the head's physics locally for the player's own
-// snake using slither's exact formulas, then smoothly reconcile when the
-// authoritative server position arrives.
-//
-// Other snakes are still rendered from snapshots (no prediction) since
-// we don't have their input.
-const pred = {
-  inited: false,
-  x: 0, y: 0,
-  heading: 0,
-  lastTimeMs: 0,
-};
-function resetPrediction(x, y, heading){
-  pred.inited = true;
-  pred.x = x; pred.y = y;
-  pred.heading = heading;
-  pred.lastTimeMs = performance.now();
-}
-// One step of predicted head physics. dt in seconds.
-function stepPrediction(dt, sct, isBoosting){
-  if (!pred.inited) return;
-  const sc = sc_of(sct);
-  const turnPerSec = PRED_MAMU * scang_of(sc) * PHYS_TICK_HZ;
-  let pxPerSec = speed_of(sc) * PHYS_TICK_HZ;
-  if (isBoosting && sct > 5) pxPerSec += PRED_BOOST_DELTA * PHYS_TICK_HZ;
-  // Turn toward aim at slither's exact turn rate
-  let dh = aim - pred.heading;
-  while (dh > Math.PI) dh -= 2 * Math.PI;
-  while (dh < -Math.PI) dh += 2 * Math.PI;
-  const maxTurn = turnPerSec * dt;
-  pred.heading += Math.max(-maxTurn, Math.min(maxTurn, dh));
-  // Advance forward
-  pred.x += Math.cos(pred.heading) * pxPerSec * dt;
-  pred.y += Math.sin(pred.heading) * pxPerSec * dt;
-}
-// Soft-correct toward the server's authoritative head when a snapshot arrives.
-// Small errors: gentle blend. Large errors (>100 world units): hard snap.
-function reconcilePrediction(serverX, serverY){
-  if (!pred.inited){ resetPrediction(serverX, serverY, 0); return; }
-  const ex = serverX - pred.x;
-  const ey = serverY - pred.y;
-  const errMag = Math.sqrt(ex*ex + ey*ey);
-  if (errMag > 100){
-    // We mis-predicted by a lot (probably died/respawned). Snap.
-    pred.x = serverX; pred.y = serverY;
-  } else {
-    // Slow blend — invisibly catches up over ~half a second
-    pred.x += ex * 0.08;
-    pred.y += ey * 0.08;
-  }
-}
-
 // CST = chain catch-up applied once per push. Slither uses 0.43 but
 // our chain settled at ~58% of expected length with that value (bodies
 // looked stubby for their score). 0.25 settles at ~76% length, closer
@@ -620,20 +565,8 @@ function reconcilePrediction(serverX, serverY){
 const CST = 0.25;
 const WSEP_BASE = 6;    // slither's wsep = 6 * sc
 
-// Physics constants mirrored from server (for client-side prediction).
-// Server uses these at 125 Hz ticks; we convert to per-second for the
-// client's variable-dt prediction loop.
-const PRED_BASE_SPEED = 1.2;   // px per 8ms-tick = ~150 px/sec at sc=1
-const PRED_NSP1 = 4.25;
-const PRED_NSP2 = 0.5;
-const PRED_BOOST_DELTA = 1.83; // per tick
-const PRED_MAMU = 0.033;       // rad per tick base turn
-const PHYS_TICK_HZ = 125;
-
 // sc = thickness factor; min 1 (tiny), max 6 (huge)
 function sc_of(sct){ return Math.min(6, 1 + (sct - 2) / 106); }
-function scang_of(sc){ return 0.13 + 0.87 * Math.pow((7 - sc) / 6, 1.7); }
-function speed_of(sc){ return PRED_BASE_SPEED * (PRED_NSP1 + PRED_NSP2*sc) / (PRED_NSP1 + PRED_NSP2); }
 
 // === Slither's exact score formula ===
 // Source: reference/slither-game.js line 141454
@@ -820,7 +753,7 @@ function handle(m){
     case"roundstart":hideScreens();countdown(m.countdownMs);break;
     case"you":amAlive=m.alive;$("spec").classList.toggle("on",!amAlive&&$("hud").classList.contains("on"));break;
     case"state":addSnap(m);$("hud").classList.add("on");hideScreens();updateHUD(m);$("warn").classList.remove("show");break;
-    case"died":amAlive=false;spectatingId=null;pred.inited=false;$("spec").classList.add("on");stopBoostSound();playDeathSound();break;
+    case"died":amAlive=false;spectatingId=null;$("spec").classList.add("on");stopBoostSound();playDeathSound();break;
     case"powerup":activePowerups.push({type:m.type,end:performance.now()+(m.type==="invincible"?10000:15000)});playPowerupSound(m.type);break;
     case"roundover":$("hud").classList.remove("on");$("spec").classList.remove("on");activePowerups=[];if(m.ended){hideWinAnimation()}else{showWinAnimation(m.winner,m.winnerId===myId,m)}break;
   }
@@ -1491,17 +1424,16 @@ function drawSnake(s,pts,isMe){
     ctx.globalAlpha=1.0;
   }
 
-  // === STRIPES — high-contrast bands ===
-  // Previous version used csw (white-blended) which was too subtle for
-  // most colors. Switched to cs04 (40% brightness = dark variant) which
-  // reads as a proper dark stripe band against the bright body. Same
-  // hue family so it looks like a single skin rather than a mismatch.
+  // === STRIPES — paint csw (white-blend) bands over the body ===
+  // Slither's actual stripe rendering uses pre-rendered sprite images
+  // per skin variant (per_color_imgs[cv]) which we can't replicate
+  // without their art assets. Approximating with stroke passes at csw.
   if(pat==="striped"||pat==="gradient"||pat==="rings"){
-    const bandSize=pat==="gradient"?5:pat==="rings"?2:5;
-    const stepSize=pat==="rings"?5:bandSize;
+    const bandSize=pat==="gradient"?5:pat==="rings"?2:4;
+    const stepSize=pat==="rings"?4:bandSize;
     let i=0,bandIdx=0;
-    ctx.globalAlpha=1.0;
-    ctx.strokeStyle=cs04;
+    ctx.globalAlpha=0.8;
+    ctx.strokeStyle=csw;
     while(i<len-1){
       const end=Math.min(i+bandSize,len-1);
       if(bandIdx%2===1){
@@ -1513,6 +1445,7 @@ function drawSnake(s,pts,isMe){
       i+=stepSize;
       bandIdx++;
     }
+    ctx.globalAlpha=1.0;
   }
 
   // === HEAD OVERLAY — re-paint body fill over head region so the head
@@ -1539,12 +1472,11 @@ function drawSnake(s,pts,isMe){
     ctx.stroke();
     // Re-paint stripes on head too so the pattern stays consistent during coil
     if(pat==="striped"||pat==="gradient"||pat==="rings"){
-      const bandSize=pat==="gradient"?5:pat==="rings"?2:5;
-      const stepSize=pat==="rings"?5:bandSize;
+      const bandSize=pat==="gradient"?5:pat==="rings"?2:4;
+      const stepSize=pat==="rings"?4:bandSize;
       const headEnd=Math.min(headLen+2,len-1);
       let i=0,bandIdx=0;
-      ctx.globalAlpha=1.0;
-      ctx.strokeStyle=cs04;
+      ctx.strokeStyle=csw;
       while(i<headEnd){
         const end=Math.min(i+bandSize,headEnd);
         if(bandIdx%2===1){
@@ -1613,51 +1545,11 @@ function drawSnake(s,pts,isMe){
     ctx.fill();
   }
 
-  // Crown — drawn above the head when this is the previous tournament
-  // champion (server sets s.cw=1 in state broadcasts for private rooms).
-  if(s.cw){
-    const crownY=hy-halfW-18;
-    const crownW=halfW*1.4;
-    const crownH=halfW*0.85;
-    // Gold base (5-pointed crown silhouette)
-    ctx.save();
-    ctx.translate(hx, crownY);
-    // Subtle bob/sparkle so it reads as alive
-    const t=performance.now()*0.003;
-    ctx.translate(0, Math.sin(t)*1.5);
-    ctx.fillStyle="#FFD23F";
-    ctx.strokeStyle="#7a5a00";
-    ctx.lineWidth=1.5;
-    ctx.beginPath();
-    // Base band
-    ctx.moveTo(-crownW/2, crownH*0.5);
-    ctx.lineTo(crownW/2, crownH*0.5);
-    ctx.lineTo(crownW/2, 0);
-    // Three points (left, middle, right)
-    ctx.lineTo(crownW*0.3, crownH*0.2);
-    ctx.lineTo(crownW*0.15, -crownH*0.5);
-    ctx.lineTo(0, crownH*0.05);
-    ctx.lineTo(-crownW*0.15, -crownH*0.5);
-    ctx.lineTo(-crownW*0.3, crownH*0.2);
-    ctx.lineTo(-crownW/2, 0);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    // Gem dot in the middle
-    ctx.fillStyle="#ff4d6d";
-    ctx.beginPath();
-    ctx.arc(0, crownH*0.15, crownW*0.08, 0, Math.PI*2);
-    ctx.fill();
-    ctx.restore();
-  }
-
   // Name
   ctx.fillStyle="rgba(255,255,255,.75)";
   ctx.font="600 12px Nunito,sans-serif";
   ctx.textAlign="center";
-  // Nudge name up a bit if there's a crown so it doesn't overlap
-  const nameY=hy-halfW-(s.cw?halfW+8:10);
-  ctx.fillText(s.n+(isMe?" (you)":""),hx,nameY);
+  ctx.fillText(s.n+(isMe?" (you)":""),hx,hy-halfW-10);
 }
 
 // ===== MAIN RENDER (snapshot buffer interpolation) =====
@@ -1676,9 +1568,6 @@ function render(){
   // Bracket-interp each snake's head, then drive client-side chain
   // relaxation off the interpolated head. The body is computed locally at
   // 60 Hz — slither.io's architecture.
-  // For the player's OWN snake we use client-side prediction instead of
-  // snapshot interp so the head responds to mouse input instantly.
-  const predNow=performance.now();
   for(const s of next.s){
     const ps=findSn(prev,s.id);
     let hx=s.p[0], hy=s.p[1];
@@ -1690,22 +1579,6 @@ function render(){
     if(!ls){
       initLocalBody(s.id, s.p, s.m);
       ls=localBodies.get(s.id);
-    }
-    // CLIENT-SIDE PREDICTION for own snake only
-    if(s.id===myId && amAlive){
-      if(!pred.inited){
-        // Initialize predicted state from server's current head + heading
-        const dx=s.p[0]-(s.p.length>=4?s.p[2]:s.p[0]);
-        const dy=s.p[1]-(s.p.length>=4?s.p[3]:s.p[1]);
-        resetPrediction(s.p[0], s.p[1], Math.atan2(dy, dx)||aim);
-      }
-      // Step physics forward by elapsed time since last frame
-      const dt=Math.max(0.001, Math.min(0.1, (predNow-pred.lastTimeMs)/1000));
-      pred.lastTimeMs=predNow;
-      stepPrediction(dt, s.m, boosting);
-      // Soft-reconcile toward server's authoritative head
-      reconcilePrediction(s.p[0], s.p[1]);
-      hx=pred.x; hy=pred.y;
     }
     updateLocalBody(ls, hx, hy, s.m);
   }
