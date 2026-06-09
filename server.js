@@ -16,7 +16,11 @@ const POSTGAME_MS      = 9000;
 //   nsp1 = 4.25, nsp2 = 0.5, nsp3 = 12
 //   mamu = 0.033, mamu2 = 0.028
 //   cst = 0.43  (chain catch-up — used every tick in body relaxation)
-const TURN_PER_TICK    = 0.033;           // slither's MAMU
+// Slither has two turn constants: mamu=0.033 (used for the local player's
+// cosmetic angle easing) and mamu2=0.028 (the authoritative rate at which
+// a snake's heading chases its wanted angle). The server-side body turn is
+// mamu2 — using 0.033 made turning ~18% twitchier than real slither.
+const TURN_PER_TICK    = 0.028;           // slither's mamu2
 const BASE_SPEED       = 1.2;             // px per 8ms tick at sc=1 = 150 px/s
 const NSP1             = 4.25;            // slither's nsp1 (speed base)
 const NSP2             = 0.5;             // slither's nsp2 (speed per sc)
@@ -178,15 +182,17 @@ class Room {
   }
 
   updateSettings(s) {
-    if (typeof s.mapSize === "number") this.settings.mapSize = Math.max(800, Math.min(5000, s.mapSize));
-    if (typeof s.borderSpeed === "number") this.settings.borderSpeed = Math.max(0.25, Math.min(4, s.borderSpeed));
-    if (typeof s.maxPlayers === "number") this.settings.maxPlayers = Math.max(2, Math.min(50, s.maxPlayers));
-    if (typeof s.graceMs === "number") this.settings.graceMs = Math.max(0, Math.min(60000, s.graceMs));
-    if (typeof s.shrinkMs === "number") this.settings.shrinkMs = Math.max(10000, Math.min(300000, s.shrinkMs));
-    if (typeof s.snakeSpeed === "number") this.settings.snakeSpeed = Math.max(0.5, Math.min(3, s.snakeSpeed));
-    if (typeof s.boostSpeed === "number") this.settings.boostSpeed = Math.max(0.5, Math.min(4, s.boostSpeed));
-    if (typeof s.foodRate === "number") this.settings.foodRate = Math.max(0.25, Math.min(5, s.foodRate));
-    if (typeof s.winsNeeded === "number") this.settings.winsNeeded = Math.max(1, Math.min(20, s.winsNeeded));
+    // Number.isFinite (not typeof) — a NaN here poisons border math and
+    // spawn positions into NaN, which renders as an empty world.
+    if (Number.isFinite(s.mapSize)) this.settings.mapSize = Math.max(800, Math.min(5000, s.mapSize));
+    if (Number.isFinite(s.borderSpeed)) this.settings.borderSpeed = Math.max(0.25, Math.min(4, s.borderSpeed));
+    if (Number.isFinite(s.maxPlayers)) this.settings.maxPlayers = Math.max(2, Math.min(50, s.maxPlayers));
+    if (Number.isFinite(s.graceMs)) this.settings.graceMs = Math.max(0, Math.min(60000, s.graceMs));
+    if (Number.isFinite(s.shrinkMs)) this.settings.shrinkMs = Math.max(10000, Math.min(300000, s.shrinkMs));
+    if (Number.isFinite(s.snakeSpeed)) this.settings.snakeSpeed = Math.max(0.5, Math.min(3, s.snakeSpeed));
+    if (Number.isFinite(s.boostSpeed)) this.settings.boostSpeed = Math.max(0.5, Math.min(4, s.boostSpeed));
+    if (Number.isFinite(s.foodRate)) this.settings.foodRate = Math.max(0.25, Math.min(5, s.foodRate));
+    if (Number.isFinite(s.winsNeeded)) this.settings.winsNeeded = Math.max(1, Math.min(20, s.winsNeeded));
     this.broadcastLobby();
   }
 
@@ -253,14 +259,12 @@ class Room {
   getSC(p) {
     return Math.min(6, 1 + (p.sct - 2) / 106);
   }
-  // scang = turn rate scaler. Slither.io's formula uses exponent 2,
-  // which gives big snakes ~15% turn rate at sc=6 and ~40% at sc=3.6
-  // (our practical max). That feels too tight — easy to wall into the
-  // storm when huge. Exponent 1.7 keeps the same shape but lifts the
-  // curve a bit: ~13% more turn rate at sc=3.6, ~23% more at sc=6.
-  // Small snakes unaffected (curve still ends at 1.0 at sc=1).
+  // scang = turn rate scaler — slither's exact quadratic falloff.
+  // Big snakes turn slowly (15% rate at sc=6); that IS the slither feel.
+  // If huge snakes ever need a mercy buff, lower the exponent toward 1.7
+  // (one line, here) — but 2.0 is what slither actually runs.
   getScang(sc) {
-    return 0.13 + 0.87 * Math.pow((7 - sc) / 6, 1.7);
+    return 0.13 + 0.87 * Math.pow((7 - sc) / 6, 2);
   }
   // wsep = segment spacing in pixels (scales with thickness)
   getWsep(p) {
@@ -522,8 +526,19 @@ class Room {
           }
         }
       }
-      // Snappy speed response — slither's boost engages quickly
-      p._curSpeed += (targetSpeed - p._curSpeed) * 0.35;
+      // Speed ramps LINEARLY toward target — slither accelerates at a
+      // fixed ±0.3 of its speed units per 8ms frame, not an exponential
+      // snap. In our px/tick units: 0.3 × (BASE_SPEED / (NSP1+NSP2)) ≈
+      // 0.076. Boost spool-up takes ~190ms (24 ticks), and easing off
+      // boost glides down over the same window. The old 0.35 exponential
+      // lerp hit target in ~80ms — boost felt like a gear-snap instead
+      // of slither's smooth surge.
+      const SPEED_RAMP = 0.076;
+      if (p._curSpeed < targetSpeed) {
+        p._curSpeed = Math.min(targetSpeed, p._curSpeed + SPEED_RAMP);
+      } else if (p._curSpeed > targetSpeed) {
+        p._curSpeed = Math.max(targetSpeed, p._curSpeed - SPEED_RAMP);
+      }
       const speed = p._curSpeed;
 
       // ===== HEAD + BODY: SLITHER.IO actual architecture =====
@@ -566,34 +581,42 @@ class Room {
           p.fam += shrinkT;
         }
 
-        // Trim to sct+1 (because index 0 is head; body has sct points)
-        while (p.points.length > p.sct + 1) {
-          const dyingTail = p.points.pop();
-          if (dyingTail) {
-            p._dyingPts.push({
-              x: dyingTail.x, y: dyingTail.y, fadeStart: now,
-            });
-          }
-        }
-
-        // ===== CHAIN RELAXATION (algorithm matches slither, lower CST) =====
-        // Slither's source uses cst=0.43. Simulated against our setup the
-        // chain settles at ~58% of (sct * wsep) length, making snakes look
-        // stubby at high sct ("body looks too thick relative to length").
-        // Dropping CST to 0.25 settles at ~76% length — visible curve but
-        // not collapsed. The 4-segment ramp at the head (n<=4) is kept.
-        const CST = 0.25;
+        // ===== CHAIN RELAXATION — slither's exact cst=0.43 =====
+        // Each point chases its predecessor once per push, with the
+        // 4-point ramp at the head. This compresses raw point spacing —
+        // that's expected and slither-correct. Body LENGTH is no longer
+        // tied to point count (see length-based trim below), so the
+        // compression no longer makes snakes stubby. In-place mutation,
+        // no per-point allocation.
+        const CST = 0.43;
         let n = 0;
         for (let m = 3; m < p.points.length; m++) {
           n++;
           const mv = n <= 4 ? CST * n / 4 : CST;
           const ahead = p.points[m - 1];
           const curr = p.points[m];
-          p.points[m] = {
-            x: curr.x + (ahead.x - curr.x) * mv,
-            y: curr.y + (ahead.y - curr.y) * mv,
-          };
+          curr.x += (ahead.x - curr.x) * mv;
+          curr.y += (ahead.y - curr.y) * mv;
         }
+
+        // ===== LENGTH-BASED TAIL TRIM (replaces count-based) =====
+        // Slither's visual body length = sct * wsep of ARC LENGTH along
+        // the path — not "sct points". Since relaxation compresses point
+        // spacing below wsep, we keep however many points it takes for
+        // the polyline to span the target length, and trim the excess.
+        // (Renderers walk this path by arc length, so collision and
+        // visuals both see a full-length body.)
+        const targetLen = p.sct * wsep;
+        let acc = 0;
+        let cut = p.points.length;
+        for (let i = 1; i < p.points.length; i++) {
+          const a = p.points[i - 1], b = p.points[i];
+          acc += Math.hypot(b.x - a.x, b.y - a.y);
+          if (acc >= targetLen) { cut = i + 1; break; }
+        }
+        if (cut < p.points.length) p.points.length = cut;
+        // Hard cap — runaway safety (a 300-sct snake needs ~700 pts)
+        if (p.points.length > 1500) p.points.length = 1500;
       }
 
       // Cleanup faded dying points (every tick, not just on push)
@@ -785,6 +808,8 @@ class Room {
         m: p.sct, p: pts,
         b: p.boost && p.sct > BOOST_MIN_SCT ? 1 : 0,
         pu: p.powerups.map(x => x.type),
+        // Crown flag — previous tournament champion in this room
+        cw: p.id === this.tournamentCrownId ? 1 : 0,
       });
     }
 
@@ -916,6 +941,7 @@ wss.on("connection", (ws, req) => {
   let msgResetTime = Date.now();
 
   ws.on("message", (raw) => {
+    try {
     // Rate limit messages
     const now = Date.now();
     if (now - msgResetTime > 1000) { msgCount = 0; msgResetTime = now; }
@@ -994,6 +1020,11 @@ wss.on("connection", (ws, req) => {
         }
         break;
     }
+    } catch (e) {
+      // A malformed message (or a bug it tickles) must not crash the
+      // process — that kills every room's sockets at once.
+      console.error("[ws message] handler crashed:", e && e.stack || e);
+    }
   });
 
   ws.on("close", () => {
@@ -1006,10 +1037,25 @@ wss.on("connection", (ws, req) => {
 
 setInterval(() => {
   for (const [code, room] of rooms) {
-    room.step();
+    // One room throwing must not kill the process (and every other
+    // room's sockets with it). Log loudly and keep ticking.
+    try {
+      room.step();
+    } catch (e) {
+      console.error(`[room ${code}] step() crashed:`, e && e.stack || e);
+    }
     if (room.players.size === 0 && room.state === "lobby") rooms.delete(code);
   }
 }, TICK_MS);
+
+// Last-resort visibility: if the process is dying in production, pm2's
+// error log gets a stack trace instead of a silent restart loop.
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] uncaughtException:", err && err.stack || err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("[FATAL] unhandledRejection:", err && err.stack || err);
+});
 
 server.listen(PORT, () => {
   console.log(`WormyRoyal.io running on http://localhost:${PORT}`);

@@ -95,12 +95,10 @@ label{display:block;font-size:10px;color:#666;text-transform:uppercase;letter-sp
 <div class="screen hide" id="customScr">
 <div class="card">
 <h1 style="font-size:32px">Customize <span>Snake</span></h1>
-<div class="sub">Pick your colors</div>
+<div class="sub">Pick your color</div>
 <canvas id="snakePreview" width="280" height="120" style="display:block;margin:0 auto 16px;border-radius:12px;background:#0b1018"></canvas>
-<label>Primary Color</label>
-<div id="colorPicker" style="display:flex;gap:6px;justify-content:center;margin:6px 0 10px;flex-wrap:wrap"></div>
-<label>Pattern</label>
-<div id="patternPicker" style="display:flex;gap:6px;justify-content:center;margin:6px 0 14px;flex-wrap:wrap"></div>
+<label>Color</label>
+<div id="colorPicker" style="display:flex;gap:6px;justify-content:center;margin:6px 0 14px;flex-wrap:wrap"></div>
 <button class="btn" id="customBackBtn">DONE</button>
 </div>
 </div>
@@ -228,27 +226,11 @@ let spectatingId=null;
 
 // ===== CUSTOMIZE SCREEN =====
 const PICK_COLORS=["#37e6c9","#ff5da2","#ffd23f","#7c5cff","#4ad66d","#ff7849","#43c6ff","#ff4d6d","#f72585","#80ed99","#ffbe0b","#c77dff"];
-const PATTERNS=["solid","striped","gradient","rings","rainbow"];
-// Slither.io's signature two-color skins. Each primary pairs with a vivid
-// secondary so stripes/gradients pop instead of looking like brightness
-// variations of the base color. Yellow is the most common slither pair.
-const COLOR_PAIRS={
-  "#37e6c9":"#fffacd",  // teal + cream
-  "#ff5da2":"#ffe0b3",  // pink + peach
-  "#ffd23f":"#ff5da2",  // yellow + pink (classic)
-  "#7c5cff":"#ffd23f",  // purple + yellow
-  "#4ad66d":"#ffd23f",  // green + yellow
-  "#ff7849":"#ffd23f",  // orange + yellow
-  "#43c6ff":"#ffd23f",  // cyan + yellow
-  "#ff4d6d":"#ffd23f",  // red + yellow (classic)
-  "#f72585":"#fffacd",  // magenta + cream
-  "#80ed99":"#ff5da2",  // mint + pink
-  "#ffbe0b":"#ff5da2",  // amber + pink
-  "#c77dff":"#ffd23f",  // lilac + yellow
-};
-function secondaryColor(hex){ return COLOR_PAIRS[hex] || "#fffacd"; }
 let chosenColor=PICK_COLORS[0];
-let chosenPattern="solid";
+// Every snake wears the classic candy-stripe (white bands on the chosen
+// color). Pattern selection removed by request — color is the identity.
+// "striped" is still sent to the server for protocol compat.
+let chosenPattern="striped";
 let previewAnim=null;
 
 (function buildPicker(){
@@ -263,20 +245,6 @@ let previewAnim=null;
       drawSnakePreview();
     };
     el.appendChild(d);
-  });
-  // Pattern picker
-  const pp=$("patternPicker");
-  PATTERNS.forEach((p,i)=>{
-    const d=document.createElement("div");
-    d.style.cssText=`padding:6px 14px;border-radius:12px;background:#1a1a2e;border:2px solid ${i===0?"#fff":"transparent"};cursor:pointer;font:600 11px Nunito,sans-serif;color:#ccc;text-transform:capitalize;transition:border .15s`;
-    d.textContent=p;
-    d.onclick=()=>{
-      chosenPattern=p;
-      pp.querySelectorAll("div").forEach(x=>x.style.borderColor="transparent");
-      d.style.borderColor="#fff";
-      drawSnakePreview();
-    };
-    pp.appendChild(d);
   });
 })();
 
@@ -314,7 +282,6 @@ function drawSnakePreview(){
   prevCtx.strokeStyle=`rgb(${cr*.12|0},${cg*.12|0},${cb*.12|0})`;
   prevCtx.stroke();
 
-  const secCol=secondaryColor(col);
   function tracePreview(){
     prevCtx.beginPath();
     prevCtx.moveTo(pts[0][0],pts[0][1]);
@@ -324,30 +291,18 @@ function drawSnakePreview(){
     }
   }
 
-  // Body fill — rainbow is a per-segment disk chain; everything else
-  // is a single stroke pass.
-  if(chosenPattern==="rainbow"){
-    const hueOff=(performance.now()*0.02)%360;
-    prevCtx.globalAlpha=0.85;
-    for(let i=pts.length-1;i>=0;i--){
-      const hue=(hueOff+i*15)%360;
-      prevCtx.fillStyle=`hsl(${hue|0},85%,55%)`;
-      prevCtx.beginPath();
-      prevCtx.arc(pts[i][0],pts[i][1],r,0,Math.PI*2);
-      prevCtx.fill();
-    }
-    prevCtx.globalAlpha=1.0;
-  } else {
-    tracePreview();
-    prevCtx.lineWidth=r*2;
-    prevCtx.strokeStyle=col;
-    prevCtx.stroke();
-  }
+  // Body fill
+  tracePreview();
+  prevCtx.lineWidth=r*2;
+  prevCtx.strokeStyle=col;
+  prevCtx.stroke();
 
-  // Color stripes/rings — true two-color slither bands
-  if(chosenPattern==="striped"||chosenPattern==="gradient"||chosenPattern==="rings"){
-    const bandSize=chosenPattern==="gradient"?5:chosenPattern==="rings"?2:4;
-    const stepSize=chosenPattern==="rings"?4:bandSize;
+  // Candy stripes — white bands, matching the in-game look (3 on / 3 off
+  // here; the preview's points are coarser than in-game render points)
+  {
+    const bandSize=3;
+    prevCtx.strokeStyle="#ffffff";
+    prevCtx.lineCap="butt";
     let i=0,bandIdx=0;
     while(i<pts.length-1){
       const end=Math.min(i+bandSize,pts.length-1);
@@ -359,11 +314,11 @@ function drawSnakePreview(){
           prevCtx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
         }
         prevCtx.lineWidth=r*2;
-        prevCtx.strokeStyle=secCol;
         prevCtx.stroke();
       }
-      i+=stepSize;bandIdx++;
+      i+=bandSize;bandIdx++;
     }
+    prevCtx.lineCap="round";
   }
 
   // Glossy top highlight
@@ -537,11 +492,12 @@ addEventListener("keydown",e=>{
 // Snapshot buffer for smooth interpolation
 const snapBuf=[];
 const SNAP_MAX=12;
-// One snapshot-period of jitter buffer (30 Hz broadcast = 33 ms cushion).
-// Just enough to let bracket-interp keep the head smooth.
-// One render-frame of jitter buffer (was 33 ms = one 30 Hz snapshot
-// period; with broadcast now at 60 Hz we only need one frame of cushion).
-const RENDER_DELAY=16;
+// Jitter buffer for head interpolation. At 60 Hz broadcast a 16 ms buffer
+// was razor-thin: any network jitter > one frame missed the interp bracket
+// and snapped to the newest snapshot — reads as stutter/"lag spikes".
+// 1.5 snapshot periods (25 ms) absorbs typical jitter while adding only
+// 9 ms over the old value.
+const RENDER_DELAY=25;
 
 // === SLITHER.IO architecture — head sparse, body computed locally =====
 // Slither's source proves the body is NOT shipped over the network — only
@@ -558,11 +514,13 @@ const RENDER_DELAY=16;
 // id → { pts:[{x,y}], _stepAcc, _initialized }
 const localBodies = new Map();
 
-// CST = chain catch-up applied once per push. Slither uses 0.43 but
-// our chain settled at ~58% of expected length with that value (bodies
-// looked stubby for their score). 0.25 settles at ~76% length, closer
-// to the noodle shape. See server.js for the same constant.
-const CST = 0.25;
+// CST = chain catch-up applied once per push — slither's exact 0.43.
+// The relaxation compresses raw point spacing below wsep; that's fine
+// now because rendering walks the path by ARC LENGTH (resampleBody) and
+// the tail trim is length-based, so visual body length is exactly
+// sct * wsep regardless of chain compression. (The old renderer drew
+// chain points directly, which is why CST=0.43 used to look stubby.)
+const CST = 0.43;
 const WSEP_BASE = 6;    // slither's wsep = 6 * sc
 
 // sc = thickness factor; min 1 (tiny), max 6 (huge)
@@ -695,18 +653,59 @@ function updateLocalBody(ls, newHeadX, newHeadY, sct){
       curr.y = curr.y + (ahead.y - curr.y) * mv;
     }
 
-    // Trim tail to match server's sct (server may have shrunk via boost).
-    while (ls.pts.length > sct + 1){
-      ls.pts.pop();
+    // LENGTH-BASED tail trim: keep enough chain history for the polyline
+    // to span the snake's full visual length (sct * wsep of arc), then
+    // drop the rest. Point COUNT no longer defines body length — the
+    // renderer walks this path by arc length (resampleBody).
+    const targetLen = sct * wsep;
+    let acc = 0;
+    let cut = ls.pts.length;
+    for (let i = 1; i < ls.pts.length; i++){
+      const a = ls.pts[i - 1], b = ls.pts[i];
+      acc += Math.hypot(b.x - a.x, b.y - a.y);
+      if (acc >= targetLen) { cut = i + 1; break; }
     }
+    if (cut < ls.pts.length) ls.pts.length = cut;
+    if (ls.pts.length > 1500) ls.pts.length = 1500; // runaway safety
   }
+}
 
-  // If the server says the body grew but we haven't pushed enough, the
-  // local body will catch up the next time a push fires. Conversely, if
-  // server's sct is less than our pts.length, we trim immediately.
-  while (ls.pts.length > sct + 1){
-    ls.pts.pop();
+// === ARC-LENGTH RESAMPLER — how slither actually draws bodies ===
+// Slither never renders its physics chain directly. Each frame it walks
+// the path from the head and lays down render points at perfectly even
+// spacing, drawing exactly (target length) worth of body. We do the same:
+// walk the local chain polyline from the (continuously-moving) head,
+// emit a render point every `wsep`, stop at sct*wsep total arc.
+//
+// This is what fixes, all at once:
+//  - stubby bodies (drawn length is exactly sct*wsep, independent of
+//    chain compression from relaxation)
+//  - per-push popping (render points derive from the smooth head walk,
+//    not from raw chain points appearing/shifting ~5×/sec)
+//  - stripe flicker (bands index off these stable render points)
+function resampleBody(ls, sct){
+  const wsep = WSEP_BASE * sc_of(sct);
+  const targetLen = sct * wsep;
+  const pts = ls.pts;
+  const out = [[pts[0].x, pts[0].y]];
+  let need = wsep;     // arc distance until the next render point
+  let drawn = 0;       // total arc emitted so far
+  for (let i = 1; i < pts.length && drawn < targetLen; i++){
+    let ax = pts[i-1].x, ay = pts[i-1].y;
+    const bx = pts[i].x, by = pts[i].y;
+    let segLen = Math.hypot(bx - ax, by - ay);
+    while (segLen >= need && drawn < targetLen){
+      const t = need / segLen;
+      ax += (bx - ax) * t;
+      ay += (by - ay) * t;
+      segLen -= need;
+      drawn += wsep;
+      need = wsep;
+      out.push([ax, ay]);
+    }
+    need -= segLen;
   }
+  return out;
 }
 let camX=0,camY=0;
 const isTouch=matchMedia("(pointer:coarse)").matches;
@@ -1300,15 +1299,6 @@ function drawSnake(s,pts,isMe){
   const cg=parseInt(col.slice(3,5),16);
   const cb=parseInt(col.slice(5,7),16);
 
-  // === Slither's exact color algorithm (line 55863 of slither-game.js) ===
-  //   cs   = base hex
-  //   cs04 = base * 0.4 (40% brightness — dark accent / outline)
-  //   csw  = (base + 255) / 2 (50/50 white blend — light accent / stripes)
-  const dr=Math.round(cr*0.4),dg=Math.round(cg*0.4),db=Math.round(cb*0.4);
-  const cs04=`rgb(${dr},${dg},${db})`;
-  const lr=Math.round((255+cr)/2),lg=Math.round((255+cg)/2),lb=Math.round((255+cb)/2);
-  const csw=`rgb(${lr},${lg},${lb})`;
-
   // === sc = thickness factor (slither: min(6, 1+(sct-2)/106)) ===
   const sc=Math.min(6,1+(s.m-2)/106);
 
@@ -1328,7 +1318,6 @@ function drawSnake(s,pts,isMe){
   const pupilMax=2.3*sc*ZOOM;
 
   const isBoosting=!!s.b;
-  const pat=s.pat||"solid";
   const headLen=Math.min(6,len-1);
 
   function tracePath(){
@@ -1394,103 +1383,47 @@ function drawSnake(s,pts,isMe){
   ctx.lineWidth=lsz+5*ZOOM;
   ctx.stroke();
 
-  // === BODY FILL — slither's lsz stroke at 80% alpha ===
-  // The fill blends with the black outline beneath, giving the body
-  // a subtle dark rim — that's slither's signature edge look.
-  // Rainbow pattern is special: per-segment hue cycle instead of flat fill.
-  if(pat==="rainbow"){
-    // Each body segment gets its own color via hue rotation. Renders as
-    // a chain of overlapping disks — same approach slither's render_mode 2
-    // uses (sprite per segment). Looks like the iconic rainbow skin.
-    // Hue advances by a fixed delta per segment so the body cycles every
-    // ~24 segments. Animated offset gives the snake a subtle shimmer.
-    const hueOff=(performance.now()*0.02)%360;
-    const halfWStroke=lsz/2;
-    ctx.globalAlpha=0.85;
-    for(let i=len-1;i>=0;i--){
-      const hue=(hueOff+i*15)%360;
-      ctx.fillStyle=`hsl(${hue|0},85%,55%)`;
-      ctx.beginPath();
-      ctx.arc(pts[i][0],pts[i][1],halfWStroke,0,Math.PI*2);
-      ctx.fill();
-    }
-    ctx.globalAlpha=1.0;
-  } else {
-    ctx.globalAlpha=0.8;
-    ctx.strokeStyle=col;
-    tracePath();
-    ctx.lineWidth=lsz;
-    ctx.stroke();
-    ctx.globalAlpha=1.0;
-  }
+  // === BODY FILL — solid primary color, full alpha ===
+  ctx.globalAlpha=1.0;
+  ctx.strokeStyle=col;
+  tracePath();
+  ctx.lineWidth=lsz;
+  ctx.stroke();
 
-  // === STRIPES — paint csw (white-blend) bands over the body ===
-  // Slither's actual stripe rendering uses pre-rendered sprite images
-  // per skin variant (per_color_imgs[cv]) which we can't replicate
-  // without their art assets. Approximating with stroke passes at csw.
-  if(pat==="striped"||pat==="gradient"||pat==="rings"){
-    const bandSize=pat==="gradient"?5:pat==="rings"?2:4;
-    const stepSize=pat==="rings"?4:bandSize;
-    let i=0,bandIdx=0;
-    ctx.globalAlpha=0.8;
-    ctx.strokeStyle=csw;
-    while(i<len-1){
-      const end=Math.min(i+bandSize,len-1);
+  // === CANDY STRIPES — white bands, 6 render-points on / 6 off ===
+  // Band parity comes from the resampled point index. Render points are
+  // laid down at even arc spacing from the head every frame, so band
+  // boundaries sit at fixed distances behind the head and slide smoothly
+  // with motion — no flicker, no per-push jumps. lineCap=butt keeps each
+  // band crisp (round caps would bleed half a body-width past each end
+  // and flood the gaps).
+  const BAND=6;
+  function paintStripes(maxIdx){
+    ctx.strokeStyle="#ffffff";
+    ctx.lineCap="butt";
+    let i=0;
+    while(i<maxIdx){
+      const bandIdx=Math.floor(i/BAND);
+      const end=Math.min((bandIdx+1)*BAND,maxIdx);
       if(bandIdx%2===1){
         if(traceRange(i,end)){
           ctx.lineWidth=lsz;
           ctx.stroke();
         }
       }
-      i+=stepSize;
-      bandIdx++;
+      i=end;
     }
-    ctx.globalAlpha=1.0;
+    ctx.lineCap="round";
   }
+  paintStripes(len-1);
 
-  // === HEAD OVERLAY — re-paint body fill over head region so the head
-  // stays on top when the snake coils on itself.
-  if(pat==="rainbow"){
-    // For rainbow we just re-draw the head disks at full alpha so they
-    // sit on top of any body the head overlaps during coil.
-    const hueOff=(performance.now()*0.02)%360;
-    const halfWStroke=lsz/2;
-    const headEndR=Math.min(headLen+2,len-1);
-    ctx.globalAlpha=1.0;
-    for(let i=headEndR;i>=0;i--){
-      const hue=(hueOff+i*15)%360;
-      ctx.fillStyle=`hsl(${hue|0},85%,55%)`;
-      ctx.beginPath();
-      ctx.arc(pts[i][0],pts[i][1],halfWStroke,0,Math.PI*2);
-      ctx.fill();
-    }
-  } else {
-    ctx.globalAlpha=0.8;
-    ctx.strokeStyle=col;
-    traceHead();
-    ctx.lineWidth=lsz;
-    ctx.stroke();
-    // Re-paint stripes on head too so the pattern stays consistent during coil
-    if(pat==="striped"||pat==="gradient"||pat==="rings"){
-      const bandSize=pat==="gradient"?5:pat==="rings"?2:4;
-      const stepSize=pat==="rings"?4:bandSize;
-      const headEnd=Math.min(headLen+2,len-1);
-      let i=0,bandIdx=0;
-      ctx.strokeStyle=csw;
-      while(i<headEnd){
-        const end=Math.min(i+bandSize,headEnd);
-        if(bandIdx%2===1){
-          if(traceRange(i,end)){
-            ctx.lineWidth=lsz;
-            ctx.stroke();
-          }
-        }
-        i+=stepSize;
-        bandIdx++;
-      }
-    }
-  }
-  ctx.globalAlpha=1.0;
+  // === HEAD OVERLAY — re-paint fill + stripes over the head region so
+  // the head stays on top when the snake coils over itself.
+  ctx.strokeStyle=col;
+  traceHead();
+  ctx.lineWidth=lsz;
+  ctx.stroke();
+  paintStripes(Math.min(headLen+2,len-1));
 
   // === EYES — slither's exact drawEyes (line ~143501) ===
   // Position: head + cos(fang)*ed + perpendicular*(esp+0.5)
@@ -1545,11 +1478,42 @@ function drawSnake(s,pts,isMe){
     ctx.fill();
   }
 
-  // Name
+  // Crown — previous tournament champion in this private room
+  // (server sets s.cw=1 in state broadcasts).
+  if(s.cw){
+    const crownW=halfW*1.4;
+    const crownH=halfW*0.85;
+    ctx.save();
+    ctx.translate(hx, hy-halfW-18);
+    ctx.translate(0, Math.sin(performance.now()*0.003)*1.5); // gentle bob
+    ctx.fillStyle="#FFD23F";
+    ctx.strokeStyle="#7a5a00";
+    ctx.lineWidth=1.5;
+    ctx.beginPath();
+    ctx.moveTo(-crownW/2, crownH*0.5);
+    ctx.lineTo(crownW/2, crownH*0.5);
+    ctx.lineTo(crownW/2, 0);
+    ctx.lineTo(crownW*0.3, crownH*0.2);
+    ctx.lineTo(crownW*0.15, -crownH*0.5);
+    ctx.lineTo(0, crownH*0.05);
+    ctx.lineTo(-crownW*0.15, -crownH*0.5);
+    ctx.lineTo(-crownW*0.3, crownH*0.2);
+    ctx.lineTo(-crownW/2, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle="#ff4d6d";
+    ctx.beginPath();
+    ctx.arc(0, crownH*0.15, crownW*0.08, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Name (nudged up when a crown occupies the usual spot)
   ctx.fillStyle="rgba(255,255,255,.75)";
   ctx.font="600 12px Nunito,sans-serif";
   ctx.textAlign="center";
-  ctx.fillText(s.n+(isMe?" (you)":""),hx,hy-halfW-10);
+  ctx.fillText(s.n+(isMe?" (you)":""),hx,hy-halfW-(s.cw?halfW+22:10));
 }
 
 // ===== MAIN RENDER (snapshot buffer interpolation) =====
@@ -1760,15 +1724,18 @@ function render(){
   ctx.strokeStyle=`rgba(255,200,210,${pulseA*0.4})`;
   ctx.lineWidth=1;ctx.stroke();
 
-  // Snakes — render from the locally-computed body (slither's architecture).
-  // The local body was already advanced at the top of render() so all we
-  // do here is project it to screen space.
+  // Snakes — resample each local body by arc length, then project to
+  // screen space. The resampler walks the chain from the continuously-
+  // moving head at perfectly even spacing, so motion is smooth and the
+  // drawn length is exactly the snake's true length.
   for(const s of next.s){
     const ls=localBodies.get(s.id);
     if(!ls||!ls.pts||ls.pts.length<2) continue;
+    const world=resampleBody(ls, s.m);
+    if(world.length<2) continue;
     const pts=[];
-    for(let i=0;i<ls.pts.length;i++){
-      pts.push(w2s(ls.pts[i].x, ls.pts[i].y));
+    for(let i=0;i<world.length;i++){
+      pts.push(w2s(world[i][0], world[i][1]));
     }
     drawSnake(s,pts,s.id===myId);
   }
