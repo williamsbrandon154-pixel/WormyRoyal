@@ -1338,6 +1338,11 @@ function drawSnake(s,pts,isMe){
       const my=(pts[j][1]+pts[j+1][1])/2;
       ctx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
     }
+    // Land exactly on pts[end] so a stripe band spans precisely
+    // (end-start) segments. Without this the band stops at the last
+    // midpoint — every band ran a half-segment short and gaps ran a
+    // half-segment long.
+    ctx.lineTo(pts[end][0],pts[end][1]);
     return true;
   }
   function traceHead(){
@@ -1423,7 +1428,13 @@ function drawSnake(s,pts,isMe){
   traceHead();
   ctx.lineWidth=lsz;
   ctx.stroke();
-  paintStripes(Math.min(headLen+2,len-1));
+  // Repaint stripes through TWO complete bands (not just headLen+2).
+  // The overlay stroke above ends with a round cap that protrudes
+  // lsz/2 ≈ 2.4 render-points past its endpoint; stopping the repaint
+  // mid-band left that cap biting a colored bulge into the first white
+  // band (the "weird crescent behind the head" artifact). Two full
+  // bands (index 12) always covers the cap's reach (~10).
+  paintStripes(Math.min(BAND*2,len-1));
 
   // === EYES — slither's exact drawEyes (line ~143501) ===
   // Position: head + cos(fang)*ed + perpendicular*(esp+0.5)
