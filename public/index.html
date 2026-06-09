@@ -272,27 +272,41 @@ function drawSnakePreview(){
 
   prevCtx.lineCap="round";prevCtx.lineJoin="round";
 
-  // Black outline under the disks (same as in-game)
-  prevCtx.beginPath();
-  prevCtx.moveTo(pts[0][0],pts[0][1]);
-  for(let i=0;i<pts.length-1;i++){
-    const mx=(pts[i][0]+pts[i+1][0])/2,my=(pts[i][1]+pts[i+1][1])/2;
-    prevCtx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
+  // Feathered outline under the disks (same as in-game)
+  function traceOutline(){
+    prevCtx.beginPath();
+    prevCtx.moveTo(pts[0][0],pts[0][1]);
+    for(let i=0;i<pts.length-1;i++){
+      const mx=(pts[i][0]+pts[i+1][0])/2,my=(pts[i][1]+pts[i+1][1])/2;
+      prevCtx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
+    }
   }
-  prevCtx.lineWidth=r*2+4;
   prevCtx.strokeStyle="#000000";
+  prevCtx.globalAlpha=0.25;
+  traceOutline();
+  prevCtx.lineWidth=r*2+7;
   prevCtx.stroke();
+  prevCtx.globalAlpha=0.8;
+  traceOutline();
+  prevCtx.lineWidth=r*2+3;
+  prevCtx.stroke();
+  prevCtx.globalAlpha=1.0;
 
-  // Overlapping shaded disk stamps, tail to head — identical to in-game.
+  // Rotated shaded disk stamps, tail to head — identical to in-game.
   // Bands: 6 points on / 6 off (same BAND as drawSnake).
   {
     const bodySpr=getBodySprite(col);
     const whiteSpr=getBodySprite("#ffffff");
     const d=r*2;
     for(let i=pts.length-1;i>=0;i--){
+      const a=pts[i>0?i-1:0], b=pts[i<pts.length-1?i+1:i];
+      const ang=Math.atan2(a[1]-b[1],a[0]-b[0]);
+      const ca=Math.cos(ang),sa=Math.sin(ang);
+      prevCtx.setTransform(ca,sa,-sa,ca,pts[i][0],pts[i][1]);
       const spr=(Math.floor(i/6)%2===1)?whiteSpr:bodySpr;
-      prevCtx.drawImage(spr,pts[i][0]-r,pts[i][1]-r,d,d);
+      prevCtx.drawImage(spr,-r,-r,d,d);
     }
+    prevCtx.setTransform(1,0,0,1,0,0);
   }
 
   // Eyes — slither.io style (matches in-game proportions)
@@ -688,8 +702,13 @@ function getBracket(){
   return null;
 }
 
+// Device-pixel-ratio scale baked into the canvas transform. Stashed so
+// per-stamp setTransform calls (rotated body sprites) can compose with it
+// and restore it without save/restore overhead.
+let CANVAS_DPR=1;
 function resize(){
   const d=Math.min(devicePixelRatio||1,2);
+  CANVAS_DPR=d;
   cv.width=innerWidth*d;cv.height=innerHeight*d;
   cv.style.width=innerWidth+"px";cv.style.height=innerHeight+"px";
   ctx.setTransform(d,0,0,d,0,0);
@@ -1256,6 +1275,16 @@ function getFoodSprite(ci){
 // overlaps it. The disk has the cylindrical shading baked in — bright
 // center plateau rolling off dark at the rim — so one cached sprite per
 // color does all the shading work and rendering is just drawImage calls.
+// The sprite is DIRECTIONAL: stamped with +x pointing along the body's
+// travel direction, so the tube cross-section runs along the sprite's
+// y axis. Brightness = a mix of two falloffs:
+//   - cross-axis cylinder (62.5%): bright spine, continuously dark
+//     SIDES — this is the dominant shading and stays seamless from one
+//     stamp to the next because adjacent stamps rotate together
+//   - radial (37.5%, floored at ~0.3): a thin, faint arc where each
+//     disk's rim overlaps the disk behind it — the subtle segment seams
+// The result matches the reference worm: strongly shaded flanks, fine
+// quiet rings across the body, bright glossy spine.
 const bodySprites={};
 function getBodySprite(color){
   let spr=bodySprites[color];
@@ -1266,18 +1295,29 @@ function getBodySprite(color){
   const cr=parseInt(color.slice(1,3),16);
   const cg=parseInt(color.slice(3,5),16);
   const cb=parseInt(color.slice(5,7),16);
-  const shade=(m)=>`rgb(${Math.min(255,Math.round(cr*m))},${Math.min(255,Math.round(cg*m))},${Math.min(255,Math.round(cb*m))})`;
-  // Gentle rim falloff — the seam lines between segments come from this
-  // edge darkening, so these stops set how pronounced the rings look.
-  // Wide bright plateau, then a soft roll-off to 78% in the outer ~15%
-  // of the disk: visible segmentation without harsh dark rings.
-  const g=x.createRadialGradient(R,R,0,R,R,R);
-  g.addColorStop(0,   shade(1.05)); // slight lift at the very center
-  g.addColorStop(0.62,shade(1.0));  // bright plateau
-  g.addColorStop(0.86,shade(0.95));
-  g.addColorStop(1,   shade(0.78)); // soft rim — subtle segment seams
-  x.fillStyle=g;
-  x.beginPath();x.arc(R,R,R,0,Math.PI*2);x.fill();
+  const img=x.createImageData(SZ,SZ);
+  const data=img.data;
+  for(let py=0;py<SZ;py++){
+    for(let px=0;px<SZ;px++){
+      const dx=px+0.5-R, dy=py+0.5-R;
+      const dist=Math.sqrt(dx*dx+dy*dy);
+      const p=(py*SZ+px)*4;
+      if(dist>R){data[p+3]=0;continue;}
+      // cylinder profile across the tube (slow falloff = wide bright
+      // plateau, steep dive right at the flanks)
+      const vc=Math.pow(Math.max(0,1-Math.abs(dy)/R),0.35);
+      // radial profile, floored ~0.3 at the rim (seam arcs, not rings)
+      const vr=Math.max(0,1-dist/(R*1.42));
+      let v=vc+(vr-vc)*0.375;
+      if(v>1)v=1;
+      data[p]  =Math.min(255,Math.round(cr*v));
+      data[p+1]=Math.min(255,Math.round(cg*v));
+      data[p+2]=Math.min(255,Math.round(cb*v));
+      // 1.5px anti-aliased edge
+      data[p+3]=Math.round(255*Math.max(0,Math.min(1,(R-dist)/1.5)));
+    }
+  }
+  x.putImageData(img,0,0);
   bodySprites[color]=c;
   return c;
 }
@@ -1352,30 +1392,44 @@ function drawSnake(s,pts,isMe){
     ctx.stroke();
   }
 
-  // === BLACK OUTLINE — slither's (lsz + 5)*gsc stroke at full alpha ===
-  ctx.globalAlpha=1.0;
+  // === OUTLINE — feathered dark rim instead of a hard black ring ===
+  // A soft wide pass plus an 80%-alpha core line; reads like a shadowed
+  // edge rather than a marker outline.
   ctx.strokeStyle="#000000";
+  ctx.globalAlpha=0.25;
   tracePath();
-  ctx.lineWidth=lsz+5*ZOOM;
+  ctx.lineWidth=lsz+8*ZOOM;
   ctx.stroke();
+  ctx.globalAlpha=0.8;
+  tracePath();
+  ctx.lineWidth=lsz+3*ZOOM;
+  ctx.stroke();
+  ctx.globalAlpha=1.0;
 
-  // === BODY — overlapping shaded disk stamps, tail to head ===
-  // One drawImage per render point. The disk sprite has the cylindrical
-  // shading baked in (bright center, dark rim); where each disk overlaps
-  // the one behind it, the rim reads as a curved seam across the body —
-  // the segment "rings" of a slither worm. Drawing tail→head also makes
-  // the head-side naturally sit on top during self-coils, so no separate
-  // head-overlay pass is needed.
-  // Stripe bands: 6 render-points on / 6 off, chosen per disk by index
-  // parity — band boundaries get the scalloped disk-edge look.
+  // === BODY — rotated shaded disk stamps, tail to head ===
+  // One drawImage per render point, each stamp ROTATED to the local body
+  // direction so the sprite's cylinder shading runs along the tube: the
+  // flanks stay continuously dark from stamp to stamp while the radial
+  // component leaves only thin seam arcs — the reference worm's look.
+  // Tail→head order keeps the head naturally on top during self-coils.
+  // Stripe bands: 6 render-points on / 6 off by index parity.
   const BAND=6;
   const bodySpr=getBodySprite(col);
   const whiteSpr=getBodySprite("#ffffff");
   const dHalf=lsz/2;
+  const dpr=CANVAS_DPR;
   for(let i=len-1;i>=0;i--){
+    // Local travel direction via central difference (head: forward diff)
+    const a=pts[i>0?i-1:0], b=pts[i<len-1?i+1:i];
+    const ang=Math.atan2(a[1]-b[1],a[0]-b[0]);
+    const ca=Math.cos(ang),sa=Math.sin(ang);
+    // Compose rotation with the devicePixelRatio base transform directly
+    // (setTransform per stamp, no save/restore churn).
+    ctx.setTransform(dpr*ca,dpr*sa,-dpr*sa,dpr*ca,dpr*pts[i][0],dpr*pts[i][1]);
     const spr=(Math.floor(i/BAND)%2===1)?whiteSpr:bodySpr;
-    ctx.drawImage(spr,pts[i][0]-dHalf,pts[i][1]-dHalf,lsz,lsz);
+    ctx.drawImage(spr,-dHalf,-dHalf,lsz,lsz);
   }
+  ctx.setTransform(dpr,0,0,dpr,0,0); // restore base transform
 
   // === EYES — slither's exact drawEyes (line ~143501) ===
   // Position: head + cos(fang)*ed + perpendicular*(esp+0.5)
