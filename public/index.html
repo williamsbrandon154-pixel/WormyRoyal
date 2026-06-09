@@ -257,82 +257,43 @@ function drawSnakePreview(){
   prevCtx.fillRect(0,0,W,H);
 
   const col=chosenColor;
-  const cr=parseInt(col.slice(1,3),16),cg=parseInt(col.slice(3,5),16),cb=parseInt(col.slice(5,7),16);
   const r=12;
   const t=performance.now()/600;
 
-  // Wavy S-curve points
+  // Wavy S-curve points — dense spacing (5px on a 24px-wide body) so the
+  // disk stamps overlap at the same ratio as in-game render points
+  // (wsep/lsz = 6/29 ≈ 0.21), giving the same segment-ring density.
   const pts=[];
-  for(let i=0;i<16;i++){
-    const px=240-i*15;
-    const py=60+Math.sin(t+i*0.5)*18;
+  for(let i=0;i<48;i++){
+    const px=240-i*5;
+    const py=60+Math.sin(t+i*0.1667)*18;
     pts.push([px,py]);
   }
 
   prevCtx.lineCap="round";prevCtx.lineJoin="round";
 
-  // Outline
+  // Black outline under the disks (same as in-game)
   prevCtx.beginPath();
   prevCtx.moveTo(pts[0][0],pts[0][1]);
   for(let i=0;i<pts.length-1;i++){
     const mx=(pts[i][0]+pts[i+1][0])/2,my=(pts[i][1]+pts[i+1][1])/2;
     prevCtx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
   }
-  prevCtx.lineWidth=r*2+5;
-  prevCtx.strokeStyle=`rgb(${cr*.12|0},${cg*.12|0},${cb*.12|0})`;
+  prevCtx.lineWidth=r*2+4;
+  prevCtx.strokeStyle="#000000";
   prevCtx.stroke();
 
-  function tracePreview(){
-    prevCtx.beginPath();
-    prevCtx.moveTo(pts[0][0],pts[0][1]);
-    for(let i=0;i<pts.length-1;i++){
-      const mx=(pts[i][0]+pts[i+1][0])/2,my=(pts[i][1]+pts[i+1][1])/2;
-      prevCtx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
+  // Overlapping shaded disk stamps, tail to head — identical to in-game.
+  // Bands: 6 points on / 6 off (same BAND as drawSnake).
+  {
+    const bodySpr=getBodySprite(col);
+    const whiteSpr=getBodySprite("#ffffff");
+    const d=r*2;
+    for(let i=pts.length-1;i>=0;i--){
+      const spr=(Math.floor(i/6)%2===1)?whiteSpr:bodySpr;
+      prevCtx.drawImage(spr,pts[i][0]-r,pts[i][1]-r,d,d);
     }
   }
-
-  // Shaded tube — same dim-base/bright-core/gloss stack as in-game.
-  // Stripes are 3 on / 3 off here (the preview's points are coarser
-  // than in-game render points).
-  function previewStripes(width,color){
-    const bandSize=3;
-    prevCtx.strokeStyle=color;
-    prevCtx.lineCap="butt";
-    let i=0,bandIdx=0;
-    while(i<pts.length-1){
-      const end=Math.min(i+bandSize,pts.length-1);
-      if(bandIdx%2===1){
-        prevCtx.beginPath();
-        prevCtx.moveTo(pts[i][0],pts[i][1]);
-        for(let j=i;j<end;j++){
-          const mx=(pts[j][0]+pts[j+1][0])/2,my=(pts[j][1]+pts[j+1][1])/2;
-          prevCtx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
-        }
-        prevCtx.lineTo(pts[end][0],pts[end][1]);
-        prevCtx.lineWidth=width;
-        prevCtx.stroke();
-      }
-      i+=bandSize;bandIdx++;
-    }
-    prevCtx.lineCap="round";
-  }
-  // dark base (tube edges)
-  tracePreview();
-  prevCtx.lineWidth=r*2;
-  prevCtx.strokeStyle=`rgb(${cr*0.6|0},${cg*0.6|0},${cb*0.6|0})`;
-  prevCtx.stroke();
-  previewStripes(r*2,"rgb(153,153,153)");
-  // bright core
-  tracePreview();
-  prevCtx.lineWidth=r*2*0.74;
-  prevCtx.strokeStyle=col;
-  prevCtx.stroke();
-  previewStripes(r*2*0.74,"#ffffff");
-  // specular gloss
-  tracePreview();
-  prevCtx.lineWidth=r*2*0.32;
-  prevCtx.strokeStyle="rgba(255,255,255,0.14)";
-  prevCtx.stroke();
 
   // Eyes — slither.io style (matches in-game proportions)
   const dir=Math.atan2(pts[0][1]-pts[2][1],pts[0][0]-pts[2][0]);
@@ -1288,11 +1249,40 @@ function getFoodSprite(ci){
   foodSprites[ci]=c;return c;
 }
 
+// ===== SNAKE BODY SPRITES — one shaded disk per color, cached =====
+// The body is drawn as overlapping disk stamps (one per render point),
+// which is what creates the segment-seam "rings" across a slither worm:
+// each disk's darkened rim shows as a curved line where the next disk
+// overlaps it. The disk has the cylindrical shading baked in — bright
+// center plateau rolling off dark at the rim — so one cached sprite per
+// color does all the shading work and rendering is just drawImage calls.
+const bodySprites={};
+function getBodySprite(color){
+  let spr=bodySprites[color];
+  if(spr)return spr;
+  const SZ=64,R=SZ/2;
+  const c=document.createElement("canvas");c.width=c.height=SZ;
+  const x=c.getContext("2d");
+  const cr=parseInt(color.slice(1,3),16);
+  const cg=parseInt(color.slice(3,5),16);
+  const cb=parseInt(color.slice(5,7),16);
+  const shade=(m)=>`rgb(${Math.min(255,Math.round(cr*m))},${Math.min(255,Math.round(cg*m))},${Math.min(255,Math.round(cb*m))})`;
+  const g=x.createRadialGradient(R,R,0,R,R,R);
+  g.addColorStop(0,   shade(1.08)); // slight lift at the very center
+  g.addColorStop(0.45,shade(1.0));  // bright plateau
+  g.addColorStop(0.78,shade(0.86));
+  g.addColorStop(1,   shade(0.55)); // dark rim — makes the segment seams
+  x.fillStyle=g;
+  x.beginPath();x.arc(R,R,R,0,Math.PI*2);x.fill();
+  bodySprites[color]=c;
+  return c;
+}
+
 // ===== SNAKE RENDERING — slither.io exact constants =====
-// All numerical constants below are pulled directly from
-// reference/slither-game.js (line numbers cited in comments). The body
-// is drawn as a single quadratic-curve stroke chain at slither's exact
-// line width and color algorithm — black outline + 80%-alpha body fill.
+// Numerical constants pulled from reference/slither-game.js (line numbers
+// cited in comments). The body renders as overlapping shaded disk stamps,
+// tail to head — slither's own architecture — over a continuous black
+// outline stroke.
 function drawSnake(s,pts,isMe){
   if(pts.length<2)return;
   const len=pts.length;
@@ -1320,38 +1310,13 @@ function drawSnake(s,pts,isMe){
   const pupilMax=2.3*sc*ZOOM;
 
   const isBoosting=!!s.b;
-  const headLen=Math.min(6,len-1);
 
+  // tracePath is still used for the continuous strokes that sit UNDER
+  // the disk stamps: black outline, boost glow, invincible glow.
   function tracePath(){
     ctx.beginPath();
     ctx.moveTo(pts[0][0],pts[0][1]);
     for(let i=0;i<len-1;i++){
-      const mx=(pts[i][0]+pts[i+1][0])/2;
-      const my=(pts[i][1]+pts[i+1][1])/2;
-      ctx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
-    }
-  }
-  function traceRange(start,end){
-    if(end<=start)return false;
-    ctx.beginPath();
-    ctx.moveTo(pts[start][0],pts[start][1]);
-    for(let j=start;j<end;j++){
-      const mx=(pts[j][0]+pts[j+1][0])/2;
-      const my=(pts[j][1]+pts[j+1][1])/2;
-      ctx.quadraticCurveTo(pts[j][0],pts[j][1],mx,my);
-    }
-    // Land exactly on pts[end] so a stripe band spans precisely
-    // (end-start) segments. Without this the band stops at the last
-    // midpoint — every band ran a half-segment short and gaps ran a
-    // half-segment long.
-    ctx.lineTo(pts[end][0],pts[end][1]);
-    return true;
-  }
-  function traceHead(){
-    const ext=Math.min(headLen+2,len-1);
-    ctx.beginPath();
-    ctx.moveTo(pts[0][0],pts[0][1]);
-    for(let i=0;i<ext;i++){
       const mx=(pts[i][0]+pts[i+1][0])/2;
       const my=(pts[i][1]+pts[i+1][1])/2;
       ctx.quadraticCurveTo(pts[i][0],pts[i][1],mx,my);
@@ -1390,80 +1355,23 @@ function drawSnake(s,pts,isMe){
   ctx.lineWidth=lsz+5*ZOOM;
   ctx.stroke();
 
-  // === TUBE SHADING — cylindrical brightness falloff ===
-  // The body reads as a 3D tube because brightness drops toward the
-  // edges (slither bakes the same falloff into its per-segment sprites:
-  // bright plateau in the middle, rolling off dark at the rim). We build
-  // it with three layered stroke passes:
-  //   1) full-width DARK base — becomes the shaded tube edges
-  //   2) 74%-width BRIGHT core — the lit center of the cylinder
-  //   3) 32%-width faint white gloss — specular line down the spine
-  // Stripes are painted twice (dim at full width, white at core width)
-  // so the white bands curve around the tube like the body color does.
-  const DIM=0.60;
-  const dimCol=`rgb(${Math.round(cr*DIM)},${Math.round(cg*DIM)},${Math.round(cb*DIM)})`;
-  const dimStripe="rgb(153,153,153)";
-  const CORE=0.74;
-
-  // === CANDY STRIPES — white bands, 6 render-points on / 6 off ===
-  // Band parity comes from the resampled point index. Render points are
-  // laid down at even arc spacing from the head every frame, so band
-  // boundaries sit at fixed distances behind the head and slide smoothly
-  // with motion — no flicker, no per-push jumps. lineCap=butt keeps each
-  // band crisp (round caps would bleed half a body-width past each end
-  // and flood the gaps).
+  // === BODY — overlapping shaded disk stamps, tail to head ===
+  // One drawImage per render point. The disk sprite has the cylindrical
+  // shading baked in (bright center, dark rim); where each disk overlaps
+  // the one behind it, the rim reads as a curved seam across the body —
+  // the segment "rings" of a slither worm. Drawing tail→head also makes
+  // the head-side naturally sit on top during self-coils, so no separate
+  // head-overlay pass is needed.
+  // Stripe bands: 6 render-points on / 6 off, chosen per disk by index
+  // parity — band boundaries get the scalloped disk-edge look.
   const BAND=6;
-  function paintStripes(maxIdx,width,color){
-    ctx.strokeStyle=color;
-    ctx.lineCap="butt";
-    let i=0;
-    while(i<maxIdx){
-      const bandIdx=Math.floor(i/BAND);
-      const end=Math.min((bandIdx+1)*BAND,maxIdx);
-      if(bandIdx%2===1){
-        if(traceRange(i,end)){
-          ctx.lineWidth=width;
-          ctx.stroke();
-        }
-      }
-      i=end;
-    }
-    ctx.lineCap="round";
+  const bodySpr=getBodySprite(col);
+  const whiteSpr=getBodySprite("#ffffff");
+  const dHalf=lsz/2;
+  for(let i=len-1;i>=0;i--){
+    const spr=(Math.floor(i/BAND)%2===1)?whiteSpr:bodySpr;
+    ctx.drawImage(spr,pts[i][0]-dHalf,pts[i][1]-dHalf,lsz,lsz);
   }
-  // Paint one full shaded tube along traceFn, striped up to maxIdx.
-  function paintTube(traceFn,maxIdx){
-    // dark base (tube edges)
-    traceFn();
-    ctx.strokeStyle=dimCol;
-    ctx.lineWidth=lsz;
-    ctx.stroke();
-    paintStripes(maxIdx,lsz,dimStripe);
-    // bright core
-    traceFn();
-    ctx.strokeStyle=col;
-    ctx.lineWidth=lsz*CORE;
-    ctx.stroke();
-    paintStripes(maxIdx,lsz*CORE,"#ffffff");
-    // specular gloss down the spine
-    traceFn();
-    ctx.strokeStyle="rgba(255,255,255,0.14)";
-    ctx.lineWidth=lsz*0.32;
-    ctx.stroke();
-  }
-
-  // === BODY ===
-  paintTube(tracePath,len-1);
-
-  // === HEAD OVERLAY — re-paint the shaded tube over the head region so
-  // the head stays on top when the snake coils over itself. Stripes are
-  // repainted through TWO complete bands (index 12): the overlay's round
-  // end cap protrudes lsz/2 ≈ 2.4 render-points past its endpoint
-  // (29/(2*6) — sc and zoom cancel), and stopping the stripe repaint
-  // mid-band left that cap biting a colored bulge into the first white
-  // band (the old "crescent behind the head" artifact). The dim/bright
-  // stripe pair rebuilds the exact same pixels the body pass left in the
-  // overlap zone, so the seam is invisible.
-  paintTube(traceHead,Math.min(BAND*2,len-1));
 
   // === EYES — slither's exact drawEyes (line ~143501) ===
   // Position: head + cos(fang)*ed + perpendicular*(esp+0.5)
