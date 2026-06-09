@@ -631,10 +631,10 @@ function updateLocalBody(ls, newHeadX, newHeadY, sct){
     }
 
     // LENGTH-BASED tail trim: keep enough chain history for the polyline
-    // to span the snake's full visual length (sct * wsep of arc), then
-    // drop the rest. Point COUNT no longer defines body length — the
-    // renderer walks this path by arc length (resampleBody).
-    const targetLen = sct * wsep;
+    // to span the snake's full visual length plus one spare segment —
+    // the renderer extends the tail by the fractional fam fill (up to
+    // +0.99 wsep), so the history must cover (sct+1) segments of arc.
+    const targetLen = (sct + 1) * wsep;
     let acc = 0;
     let cut = ls.pts.length;
     for (let i = 1; i < ls.pts.length; i++){
@@ -660,25 +660,36 @@ function updateLocalBody(ls, newHeadX, newHeadY, sct){
 //  - per-push popping (render points derive from the smooth head walk,
 //    not from raw chain points appearing/shifting ~5×/sec)
 //  - stripe flicker (bands index off these stable render points)
-function resampleBody(ls, sct){
+function resampleBody(ls, sct, famFrac){
   const wsep = WSEP_BASE * sc_of(sct);
-  const targetLen = sct * wsep;
+  // famFrac (0..0.99) extends the tail continuously as the snake fills
+  // toward its next segment — slither's tl = sct + min(1, fam). Eating
+  // reads as smooth tail growth instead of whole-segment pops.
+  const targetLen = (sct + (famFrac || 0)) * wsep;
   const pts = ls.pts;
   const out = [[pts[0].x, pts[0].y]];
-  let need = wsep;     // arc distance until the next render point
-  let drawn = 0;       // total arc emitted so far
-  for (let i = 1; i < pts.length && drawn < targetLen; i++){
+  let drawn = 0;                              // total arc emitted so far
+  // `step` is the arc length of the step in progress (wsep, except the
+  // final one, which shrinks so the last render point lands at EXACTLY
+  // targetLen of arc — the fractional fam fill extends the tail
+  // pixel-continuously instead of rounding up to a whole segment).
+  // `need` is how much of that step remains; it can span several chain
+  // segments, so on emit we credit `drawn` with the FULL step.
+  let step = Math.min(wsep, targetLen);
+  let need = step;
+  for (let i = 1; i < pts.length && drawn < targetLen - 1e-6; i++){
     let ax = pts[i-1].x, ay = pts[i-1].y;
     const bx = pts[i].x, by = pts[i].y;
     let segLen = Math.hypot(bx - ax, by - ay);
-    while (segLen >= need && drawn < targetLen){
+    while (segLen >= need && drawn < targetLen - 1e-6){
       const t = need / segLen;
       ax += (bx - ax) * t;
       ay += (by - ay) * t;
       segLen -= need;
-      drawn += wsep;
-      need = wsep;
+      drawn += step;
       out.push([ax, ay]);
+      step = Math.min(wsep, targetLen - drawn);
+      need = step;
     }
     need -= segLen;
   }
@@ -1573,23 +1584,30 @@ function render(){
     if(me) $("specName").textContent=me.n||"—";
   }
   if(me){
-    // Camera follows the local head (matches what we render).
+    // Camera is PINNED to the head — slither's camera is view = head
+    // position (plus its own smoothing buffer); the head never drifts
+    // off-center. Our local head is already continuous at 60 Hz, so we
+    // pin with a fast 0.5 blend that absorbs single-frame jolts (late
+    // snapshots) but keeps the head dead-center in normal play.
+    // (The old 0.15 lerp trailed the head by ~14px at cruise, ~35px
+    // during boost — that off-center drift isn't slither behavior.)
     const meLs=localBodies.get(me.id);
     const meHead=meLs&&meLs.pts[0];
     const tx=meHead?meHead.x:me.p[0];
     const ty=meHead?meHead.y:me.p[1];
-    camX+=(tx-camX)*0.15;camY+=(ty-camY)*0.15;
+    camX+=(tx-camX)*0.5;camY+=(ty-camY)*0.5;
 
-    // Camera zoom out based on snake size — but more conservative than
-    // before. Slither.io keeps small snakes feeling 'close' and only
-    // pulls back significantly at large size. me.r now ranges ~13 (start)
-    // to ~40 (max) with the new thicker bodies.
-    // Use a milder scaling factor so small/medium snakes stay zoomed in.
-    // sc range = 1..6, body radius = 14.5*sc, so r range = 14.5..87
-    const growth=Math.max(0,Math.min(1,(me.r-14.5)/72.5)); // 0 at start, 1 at max size
-    const targetZoom=ZOOM_BASE*(1-growth*0.5); // pull back up to 50% at max
-    // Very slow lerp — gradual cinematic camera pullback
-    ZOOM+=(targetZoom-ZOOM)*0.03;
+    // Zoom — slither's exact size curve and drift rate:
+    //   dgsc = 0.64285 + 0.514285714 / max(1, (sct+16)/36)
+    // ≈1.16 when tiny, ~1.07 at the 27-segment spawn, easing toward a
+    // 0.64 floor as sct grows. gsc then DRIFTS toward the target at
+    // ±0.0002 per frame — a pullback so gradual you never notice the
+    // camera moving, only that the world got bigger.
+    const dgsc=0.64285+0.514285714/Math.max(1,(me.m+16)/36);
+    const targetZoom=ZOOM_BASE*dgsc;
+    const drift=0.0002*ZOOM_BASE;
+    if(ZOOM<targetZoom)ZOOM=Math.min(targetZoom,ZOOM+drift);
+    else if(ZOOM>targetZoom)ZOOM=Math.max(targetZoom,ZOOM-drift);
   }
 
   const w2s=(wx,wy)=>[(wx-camX)*ZOOM+W/2,(wy-camY)*ZOOM+H/2];
@@ -1737,7 +1755,7 @@ function render(){
   for(const s of next.s){
     const ls=localBodies.get(s.id);
     if(!ls||!ls.pts||ls.pts.length<2) continue;
-    const world=resampleBody(ls, s.m);
+    const world=resampleBody(ls, s.m, s.fm);
     if(world.length<2) continue;
     const pts=[];
     for(let i=0;i<world.length;i++){

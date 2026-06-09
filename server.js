@@ -802,10 +802,17 @@ class Room {
         const lastIdx = total - 1;
         pts.push(Math.round(p.points[lastIdx].x), Math.round(p.points[lastIdx].y));
       }
+      // Fractional fullness toward the next segment (0..0.99). Lets the
+      // client extend the tail continuously while eating — slither's
+      // tail grows smoothly (tl = sct + min(1, fam)), not in whole-
+      // segment pops.
+      const famFrac = Math.max(0, Math.min(0.99,
+        Math.round((p.fam / growthThreshold(p.sct)) * 100) / 100));
       snakes.push({
         id: p.id, n: p.name, c: p.color, pat: p.pattern,
         r: Math.round(this.snakeRadius(p)),
         m: p.sct, p: pts,
+        fm: famFrac,
         b: p.boost && p.sct > BOOST_MIN_SCT ? 1 : 0,
         pu: p.powerups.map(x => x.type),
         // Crown flag — previous tournament champion in this room
