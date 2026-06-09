@@ -1267,11 +1267,15 @@ function getBodySprite(color){
   const cg=parseInt(color.slice(3,5),16);
   const cb=parseInt(color.slice(5,7),16);
   const shade=(m)=>`rgb(${Math.min(255,Math.round(cr*m))},${Math.min(255,Math.round(cg*m))},${Math.min(255,Math.round(cb*m))})`;
+  // Gentle rim falloff — the seam lines between segments come from this
+  // edge darkening, so these stops set how pronounced the rings look.
+  // Wide bright plateau, then a soft roll-off to 78% in the outer ~15%
+  // of the disk: visible segmentation without harsh dark rings.
   const g=x.createRadialGradient(R,R,0,R,R,R);
-  g.addColorStop(0,   shade(1.08)); // slight lift at the very center
-  g.addColorStop(0.45,shade(1.0));  // bright plateau
-  g.addColorStop(0.78,shade(0.86));
-  g.addColorStop(1,   shade(0.55)); // dark rim — makes the segment seams
+  g.addColorStop(0,   shade(1.05)); // slight lift at the very center
+  g.addColorStop(0.62,shade(1.0));  // bright plateau
+  g.addColorStop(0.86,shade(0.95));
+  g.addColorStop(1,   shade(0.78)); // soft rim — subtle segment seams
   x.fillStyle=g;
   x.beginPath();x.arc(R,R,R,0,Math.PI*2);x.fill();
   bodySprites[color]=c;
