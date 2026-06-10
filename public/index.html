@@ -884,36 +884,8 @@ let boostSoundPlaying=false;
 let boostOsc=null,boostGain=null,boostNoise=null,boostNoiseGain=null;
 
 function startBoostSound(){
-  if(boostSoundPlaying)return;
-  boostSoundPlaying=true;
-  const ac=getAudio();
-  // Low hum oscillator
-  boostOsc=ac.createOscillator();
-  boostOsc.type="sawtooth";
-  boostOsc.frequency.setValueAtTime(80,ac.currentTime);
-  boostOsc.frequency.linearRampToValueAtTime(120,ac.currentTime+0.3);
-  boostGain=ac.createGain();
-  boostGain.gain.setValueAtTime(0,ac.currentTime);
-  boostGain.gain.linearRampToValueAtTime(0.08,ac.currentTime+0.15);
-  // Filter for warmth
-  const filter=ac.createBiquadFilter();
-  filter.type="lowpass";filter.frequency.value=300;
-  boostOsc.connect(filter);filter.connect(boostGain);boostGain.connect(ac.destination);
-  boostOsc.start();
-  // Whoosh noise
-  const bufSize=ac.sampleRate*2;
-  const buf=ac.createBuffer(1,bufSize,ac.sampleRate);
-  const data=buf.getChannelData(0);
-  for(let i=0;i<bufSize;i++)data[i]=Math.random()*2-1;
-  boostNoise=ac.createBufferSource();
-  boostNoise.buffer=buf;boostNoise.loop=true;
-  boostNoiseGain=ac.createGain();
-  boostNoiseGain.gain.setValueAtTime(0,ac.currentTime);
-  boostNoiseGain.gain.linearRampToValueAtTime(0.06,ac.currentTime+0.2);
-  const nf=ac.createBiquadFilter();
-  nf.type="bandpass";nf.frequency.value=800;nf.Q.value=0.5;
-  boostNoise.connect(nf);nf.connect(boostNoiseGain);boostNoiseGain.connect(ac.destination);
-  boostNoise.start();
+  // Boost sound removed by request — boosting is visual-only now (glow).
+  // Function kept as a no-op so call sites stay untouched.
 }
 
 function stopBoostSound(){
@@ -1257,8 +1229,20 @@ const foodSprites={};
 // Holds 5 floats per visible food: sx, sy, ci, pulse, rad.
 const _foodVis=new Float32Array(2048*5);
 // Tracks "when did we first see this food?" for spawn pop-in animation.
-// Keyed by position hash (fx|0)*10000 + (fy|0).
 const _foodBorn=new Map();
+// Position-hash key for orb identity. Coords offset to stay positive
+// (map radius ≤ 5000) and packed into a safe integer.
+function fkey(x,y){return (((x+6000)|0)<<14)+((y+6000)|0)}
+// Snapshot-to-snapshot orb identity tracking:
+//  - _prevFood:  key → [x,y] from the last diffed snapshot
+//  - _foodMoving: keys of orbs that moved this snapshot (magnet drag) —
+//    their wobble is suppressed so they glide instead of jittering
+//  - _foodEat:   orbs that just vanished next to a snake's head — they
+//    fly into the mouth as a brief particle instead of blinking out
+let _prevFood=new Map();
+let _prevFoodT=0;
+const _foodMoving=new Set();
+const _foodEat=[];
 function getFoodSprite(ci){
   if(foodSprites[ci])return foodSprites[ci];
   const sz=28;
@@ -1333,6 +1317,54 @@ function getBodySprite(color){
   return c;
 }
 
+// ===== BOOST GLOW SPRITES — soft radial bloom per color, cached =====
+// Drawn additively ("lighter") at every render point while boosting.
+// Because neighbouring glow disks overlap ~14 deep near the body, even a
+// low per-disk alpha stacks to a white-hot core that fades into a wide
+// colored halo — the slither boost look. The sprite color is brightness-
+// normalized (dark skins lifted toward a fixed luminance) so navy/purple
+// snakes glow as brightly as yellow ones, like slither's glow sprites.
+const glowSprites={};
+function getGlowSprite(color){
+  let spr=glowSprites[color];
+  if(spr)return spr;
+  const SZ=64,R=SZ/2;
+  const c=document.createElement("canvas");c.width=c.height=SZ;
+  const x=c.getContext("2d");
+  let cr=parseInt(color.slice(1,3),16);
+  let cg=parseInt(color.slice(3,5),16);
+  let cb=parseInt(color.slice(5,7),16);
+  // Normalize luminance: scale channels so the mean lands near 120
+  const t1=(cr+cg+cb)/3;
+  if(t1<=24){cr=cg=cb=90}
+  else{
+    const t2=120/t1;
+    cr=Math.min(255,Math.floor(cr*t2));
+    cg=Math.min(255,Math.floor(cg*t2));
+    cb=Math.min(255,Math.floor(cb*t2));
+  }
+  const img=x.createImageData(SZ,SZ);
+  const data=img.data;
+  for(let py=0;py<SZ;py++){
+    for(let px=0;px<SZ;px++){
+      const dx=px+0.5-R, dy=py+0.5-R;
+      const dist=Math.sqrt(dx*dx+dy*dy);
+      const p=(py*SZ+px)*4;
+      // Cosine bloom: smooth ease from full at center to zero at rim
+      let v=Math.max(0,1-dist/R);
+      v=0.5*(1-Math.cos(Math.PI*v));
+      data[p]=cr; data[p+1]=cg; data[p+2]=cb;
+      data[p+3]=Math.round(255*v);
+    }
+  }
+  x.putImageData(img,0,0);
+  glowSprites[color]=c;
+  return c;
+}
+// Per-snake boost-glow ramp (0..1) so the bloom fades in/out smoothly
+// with the ~190ms speed spool instead of snapping with the boost flag.
+const boostGlow=new Map();
+
 // ===== SNAKE RENDERING — slither.io exact constants =====
 // Numerical constants pulled from reference/slither-game.js (line numbers
 // cited in comments). The body renders as overlapping shaded disk stamps,
@@ -1365,9 +1397,12 @@ function drawSnake(s,pts,isMe){
   const pupilMax=2.3*sc*ZOOM;
 
   const isBoosting=!!s.b;
+  // Stripe band size in render points (6 on / 6 off) — used by both the
+  // boost glow and the body stamps, so declared before either.
+  const BAND=6;
 
   // tracePath is still used for the continuous strokes that sit UNDER
-  // the disk stamps: black outline, boost glow, invincible glow.
+  // the disk stamps: black outline, invincible glow.
   function tracePath(){
     ctx.beginPath();
     ctx.moveTo(pts[0][0],pts[0][1]);
@@ -1381,17 +1416,30 @@ function drawSnake(s,pts,isMe){
   ctx.lineCap="round";
   ctx.lineJoin="round";
 
-  // === BOOST GLOW — slither's 3-pass widening stroke (line 117400) ===
-  // When o.sp > o.fsp, the body is wrapped in three progressively wider
-  // strokes at 30% alpha of the primary color.
-  if(isBoosting){
-    ctx.save();
-    ctx.strokeStyle=col;
-    ctx.globalAlpha=0.3;
-    tracePath();ctx.lineWidth=lsz+6*ZOOM;ctx.stroke();
-    tracePath();ctx.lineWidth=lsz+9*ZOOM;ctx.stroke();
-    tracePath();ctx.lineWidth=lsz+12*ZOOM;ctx.stroke();
-    ctx.restore();
+  // === BOOST GLOW — additive bloom stamped at every render point ===
+  // A per-snake ramp eases toward the boost flag so the bloom breathes
+  // in and out with the ~190ms speed spool instead of snapping. Each
+  // point stamps a soft radial glow sprite with composite "lighter";
+  // the deep overlap near the body stacks into a white-hot core that
+  // fades into a wide halo — white band sections bloom white, colored
+  // sections bloom in the skin color, like the reference.
+  let glow=boostGlow.get(s.id)||0;
+  glow+=((isBoosting?1:0)-glow)*0.08;
+  if(glow<0.02)glow=isBoosting?0.02:0;
+  boostGlow.set(s.id,glow);
+  if(glow>0){
+    const gd=lsz*3.0;            // bloom diameter ≈ 3 body widths
+    const gh=gd/2;
+    const colGlow=getGlowSprite(col);
+    const whiteGlow=getGlowSprite("#ffffff");
+    ctx.globalCompositeOperation="lighter";
+    ctx.globalAlpha=0.09*glow;
+    for(let i=len-1;i>=0;i--){
+      const spr=(Math.floor(i/BAND)%2===1)?whiteGlow:colGlow;
+      ctx.drawImage(spr,pts[i][0]-gh,pts[i][1]-gh,gd,gd);
+    }
+    ctx.globalAlpha=1.0;
+    ctx.globalCompositeOperation="source-over";
   }
 
   // INVINCIBLE — golden flash (our addition, not slither's)
@@ -1423,8 +1471,8 @@ function drawSnake(s,pts,isMe){
   // flanks stay continuously dark from stamp to stamp while the radial
   // component leaves only thin seam arcs — the reference worm's look.
   // Tail→head order keeps the head naturally on top during self-coils.
-  // Stripe bands: 6 render-points on / 6 off by index parity.
-  const BAND=6;
+  // Stripe bands: BAND render-points on / off by index parity (declared
+  // at the top of drawSnake, shared with the boost glow).
   const bodySpr=getBodySprite(col);
   const whiteSpr=getBodySprite("#ffffff");
   const dHalf=lsz/2;
@@ -1645,34 +1693,105 @@ function render(){
     // gfr is in slither's frame-counter units (60 per second at 60 Hz).
     const gfrNow=nowMs*0.06;
     const fsz0=28*ZOOM;
+
+    // --- Orb identity diff (once per snapshot, not per frame) ---
+    // Tracks every orb across snapshots so that:
+    //  - magnet-dragged orbs keep their identity (no pop-in flicker
+    //    while moving — they used to hash to a "new" orb every packet)
+    //  - eaten orbs spawn a fly-into-the-mouth particle instead of
+    //    blinking out of existence near the head
+    //  - only genuinely new orbs run the spawn pop-in
+    // This also kills the old "all food blinks at once" bug: _foodBorn
+    // used to be mass-cleared when it grew too big (stale keys never
+    // left), resetting every orb's birth at the same instant. Now stale
+    // keys are deleted the moment their orb disappears, so the map stays
+    // exactly in sync and never needs a nuke.
+    if(next._t!==_prevFoodT){
+      _prevFoodT=next._t;
+      _foodMoving.clear();
+      const cur=new Map();
+      for(let i=0;i<next.f.length;i+=2){
+        cur.set(fkey(next.f[i],next.f[i+1]),[next.f[i],next.f[i+1]]);
+      }
+      const removed=[];
+      for(const [k,p] of _prevFood) if(!cur.has(k)) removed.push([k,p[0],p[1]]);
+      const added=[];
+      for(const [k,p] of cur) if(!_prevFood.has(k)&&!_foodBorn.has(k)) added.push([k,p[0],p[1]]);
+      // 1) Moved orbs (magnet drag): pair each vanished key with the
+      //    nearest new key within 45px and transfer its birth time.
+      for(const r of removed){
+        let best=-1,bd=45*45;
+        for(let a=0;a<added.length;a++){
+          if(!added[a])continue;
+          const dx=added[a][1]-r[1],dy=added[a][2]-r[2];
+          const d2=dx*dx+dy*dy;
+          if(d2<bd){bd=d2;best=a}
+        }
+        if(best>=0){
+          _foodBorn.set(added[best][0],_foodBorn.get(r[0])||0);
+          _foodBorn.delete(r[0]);
+          _foodMoving.add(added[best][0]);
+          added[best]=null;
+          r[0]=-1; // consumed by the move-match
+        }
+      }
+      // 2) Eaten orbs: vanished next to a snake's head → fly-in particle
+      for(const r of removed){
+        if(r[0]===-1)continue;
+        _foodBorn.delete(r[0]);
+        let eater=null,bd=1e9;
+        for(const s2 of next.s){
+          const ls2=localBodies.get(s2.id);
+          const hx2=ls2&&ls2.pts[0]?ls2.pts[0].x:s2.p[0];
+          const hy2=ls2&&ls2.pts[0]?ls2.pts[0].y:s2.p[1];
+          const dx=hx2-r[1],dy=hy2-r[2];
+          const d2=dx*dx+dy*dy;
+          const reach=s2.r+90;
+          if(d2<reach*reach&&d2<bd){bd=d2;eater=s2.id}
+        }
+        if(eater!=null&&_foodEat.length<120){
+          const ci=Math.abs((r[1]*7+r[2]*3)|0)%FC.length;
+          _foodEat.push({x:r[1],y:r[2],ci,id:eater,t0:nowMs});
+        }
+        // else: despawned outside the border — just gone, no particle
+      }
+      // 3) Brand-new orbs start their pop-in now
+      for(const a of added){ if(a) _foodBorn.set(a[0],nowMs); }
+      _prevFood=cur;
+    }
+
     const vis=_foodVis;
     let vc=0;
     for(let i=0;i<next.f.length;i+=2){
       const fx0=next.f[i], fy0=next.f[i+1];
+      const key=fkey(fx0,fy0);
       // Per-food random-but-deterministic values from position hash.
       // wsp range = ±0.0225 (slither's exact range).
       const hash=(fx0*97+fy0*31)|0;
       const wsp=(((hash&1023)/1023)-0.5)*0.045; // -0.0225 .. +0.0225
       const gfrPhase=(hash>>>5)%64;             // 0..63 initial offset
       const gfr=gfrNow+gfrPhase;
-      // Wobble: cos(wsp * gfr) * 6 (slither's exact formula)
-      const fx=fx0+Math.cos(wsp*gfr)*6;
-      const fy=fy0+Math.sin(wsp*gfr)*6;
+      // Wobble: cos(wsp * gfr) * 6 (slither's exact formula). Suppressed
+      // while the orb is being dragged by a magnet — its hash changes
+      // every packet, which would re-roll the wobble phase into jitter.
+      let fx=fx0, fy=fy0;
+      if(!_foodMoving.has(key)){
+        fx+=Math.cos(wsp*gfr)*6;
+        fy+=Math.sin(wsp*gfr)*6;
+      }
       const sx=(fx-camX)*ZOOM+W/2;
       const sy=(fy-camY)*ZOOM+H/2;
       if(sx<-25||sx>W+25||sy<-25||sy>H+25)continue;
       const ci=Math.abs((fx0*7+fy0*3)|0)%FC.length;
       // Pulse: full 0..1 brightness range — slither's exact formula.
       const pulse=0.5+0.5*Math.cos(gfr/13);
-      // Spawn pop-in via position-keyed birth timestamp.
-      const key=(fx0|0)*10000+(fy0|0);
+      // Spawn pop-in via identity-keyed birth timestamp.
       let bornAt=_foodBorn.get(key);
       if(bornAt===undefined){ bornAt=nowMs; _foodBorn.set(key, bornAt); }
       const age=(nowMs-bornAt)/300; // 0..1 over 300ms (slither ~rsp*vfr/150)
       const rad=age>=1?1:0.5*(1-Math.cos(Math.PI*Math.min(1,age)));
       vis[vc++]=sx; vis[vc++]=sy; vis[vc++]=ci; vis[vc++]=pulse; vis[vc++]=rad;
     }
-    if(_foodBorn.size>next.f.length+200) _foodBorn.clear();
 
     // Pass 1: base sprite at normal alpha
     ctx.globalAlpha=1.0;
@@ -1692,6 +1811,25 @@ function render(){
     }
     ctx.globalAlpha=1.0;
     ctx.globalCompositeOperation="source-over";
+
+    // --- Eaten-orb particles: accelerate into the eater's mouth ---
+    // The head position is read live from the eater's local body, so the
+    // orb chases the mouth even while the snake keeps moving.
+    for(let i=_foodEat.length-1;i>=0;i--){
+      const fe=_foodEat[i];
+      const t=(nowMs-fe.t0)/240;
+      if(t>=1){_foodEat.splice(i,1);continue}
+      const ls2=localBodies.get(fe.id);
+      let hx2=fe.x,hy2=fe.y;
+      if(ls2&&ls2.pts[0]){hx2=ls2.pts[0].x;hy2=ls2.pts[0].y}
+      const e=t*t; // ease-in — speeds up as it approaches the mouth
+      const[sx,sy]=w2s(fe.x+(hx2-fe.x)*e, fe.y+(hy2-fe.y)*e);
+      if(sx<-30||sx>W+30||sy<-30||sy>H+30)continue;
+      ctx.globalAlpha=1-t*0.4;
+      const fsz=fsz0*(1-0.5*t);
+      ctx.drawImage(getFoodSprite(fe.ci),sx-fsz/2,sy-fsz/2,fsz,fsz);
+    }
+    ctx.globalAlpha=1.0;
   }
 
   // Power-ups on map
@@ -1764,12 +1902,15 @@ function render(){
     drawSnake(s,pts,s.id===myId);
   }
 
-  // GC local-body state for snakes that died or left.
+  // GC local-body + glow state for snakes that died or left.
   if (localBodies.size > next.s.length){
     const liveIds = new Set();
     for (const s of next.s) liveIds.add(s.id);
     for (const id of [...localBodies.keys()]){
-      if (!liveIds.has(id)) localBodies.delete(id);
+      if (!liveIds.has(id)){
+        localBodies.delete(id);
+        boostGlow.delete(id);
+      }
     }
   }
 
